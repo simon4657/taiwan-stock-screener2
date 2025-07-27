@@ -36,13 +36,44 @@
         
         .header h1 {
             font-size: 2.5em;
-            margin-bottom: 10px;
+            margin-bottom: 15px;
             font-weight: 300;
         }
         
-        .header p {
-            font-size: 1.1em;
+        .time-info {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+        
+        .time-info div {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .time-info .label {
+            font-weight: 600;
             opacity: 0.9;
+        }
+        
+        .time-info span:not(.label) {
+            background: rgba(255,255,255,0.2);
+            padding: 4px 12px;
+            border-radius: 15px;
+            font-family: monospace;
+        }
+        
+        .real-data-notice {
+            background: rgba(40, 167, 69, 0.2);
+            border: 1px solid rgba(40, 167, 69, 0.3);
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 1.1em;
+            font-weight: 500;
+            color: #e8f5e8;
         }
         
         .controls {
@@ -103,11 +134,13 @@
         .status.error {
             background: #f8d7da;
             border-left-color: #dc3545;
+            color: #721c24;
         }
         
-        .status.warning {
-            background: #fff3cd;
-            border-left-color: #ffc107;
+        .status.success {
+            background: #d4edda;
+            border-left-color: #28a745;
+            color: #155724;
         }
         
         .results {
@@ -120,70 +153,134 @@
             font-size: 1.8em;
         }
         
-        .sort-controls {
-            margin-bottom: 20px;
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-        
-        .sort-btn {
-            padding: 8px 16px;
-            border: 1px solid #ddd;
+        .stock-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
             background: white;
-            border-radius: 20px;
-            cursor: pointer;
-            transition: all 0.3s ease;
-        }
-        
-        .sort-btn:hover, .sort-btn.active {
-            background: #667eea;
-            color: white;
-            border-color: #667eea;
-        }
-        
-        .table-container {
-            overflow-x: auto;
             border-radius: 10px;
+            overflow: hidden;
             box-shadow: 0 5px 15px rgba(0,0,0,0.1);
         }
         
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            background: white;
-        }
-        
-        th, td {
-            padding: 15px;
+        .stock-table th {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 12px;
             text-align: left;
-            border-bottom: 1px solid #e9ecef;
+            font-weight: 600;
+            font-size: 14px;
         }
         
-        th {
+        .stock-table td {
+            padding: 12px;
+            border-bottom: 1px solid #e9ecef;
+            font-size: 14px;
+        }
+        
+        .stock-table tr:hover {
             background: #f8f9fa;
+        }
+        
+        .stock-table tr:last-child td {
+            border-bottom: none;
+        }
+        
+        .stock-code {
             font-weight: 600;
             color: #2c3e50;
         }
         
-        tr:hover {
-            background: #f8f9fa;
+        .stock-name {
+            color: #6c757d;
+        }
+        
+        .price {
+            font-weight: 600;
+            font-family: monospace;
+        }
+        
+        .change-positive {
+            color: #dc3545;
+            font-weight: 600;
+        }
+        
+        .change-negative {
+            color: #28a745;
+            font-weight: 600;
+        }
+        
+        .signal-status {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            text-align: center;
+        }
+        
+        .signal-entry {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        
+        .signal-increase {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .signal-decrease {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .signal-exit {
+            background: #e2e3e5;
+            color: #383d41;
+            border: 1px solid #d6d8db;
+        }
+        
+        .score {
+            font-weight: 600;
+            font-family: monospace;
+        }
+        
+        .score-high {
+            color: #dc3545;
+        }
+        
+        .score-medium {
+            color: #ffc107;
+        }
+        
+        .score-low {
+            color: #6c757d;
+        }
+        
+        .date-info {
+            font-size: 12px;
+            color: #6c757d;
+            font-family: monospace;
         }
         
         .loading {
             text-align: center;
             padding: 40px;
-            color: #666;
+            color: #6c757d;
         }
         
-        .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #667eea;
+        .loading::after {
+            content: '';
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
             border-radius: 50%;
-            width: 40px;
-            height: 40px;
             animation: spin 1s linear infinite;
-            margin: 0 auto 20px;
+            margin-left: 10px;
         }
         
         @keyframes spin {
@@ -191,16 +288,21 @@
             100% { transform: rotate(360deg); }
         }
         
-        .footer {
-            padding: 20px 30px;
-            background: #2c3e50;
-            color: white;
+        .no-results {
             text-align: center;
+            padding: 40px;
+            color: #6c757d;
+            font-size: 1.1em;
         }
         
         @media (max-width: 768px) {
             .header h1 {
                 font-size: 2em;
+            }
+            
+            .time-info {
+                flex-direction: column;
+                gap: 10px;
             }
             
             .button-group {
@@ -209,12 +311,16 @@
             }
             
             .btn {
-                width: 100%;
-                max-width: 300px;
+                width: 200px;
             }
             
-            .sort-controls {
-                justify-content: center;
+            .stock-table {
+                font-size: 12px;
+            }
+            
+            .stock-table th,
+            .stock-table td {
+                padding: 8px 6px;
             }
         }
     </style>
@@ -223,254 +329,279 @@
     <div class="container">
         <div class="header">
             <h1>台股主力資金進入篩選器</h1>
-            <p>智能分析主力資金流向，精準捕捉投資機會</p>
+            <div class="time-info">
+                <div class="update-time">
+                    <span class="label">最新更新時間:</span>
+                    <span id="lastUpdateTime">載入中...</span>
+                </div>
+                <div class="data-date">
+                    <span class="label">資料日期:</span>
+                    <span id="dataDate">載入中...</span>
+                </div>
+            </div>
+            <div class="real-data-notice">
+                ✅ 本系統使用台灣證券交易所真實市場資料，提供準確的Pine Script技術分析結果
+            </div>
         </div>
         
         <div class="controls">
             <div class="button-group">
-                <button id="updateBtn" class="btn btn-secondary">更新股票資料</button>
-                <button id="screenBtn" class="btn btn-primary">開始篩選</button>
+                <button class="btn btn-primary" onclick="updateStocks()">更新股票資料</button>
+                <button class="btn btn-secondary" onclick="screenStocks()">開始篩選</button>
             </div>
         </div>
         
         <div id="status" class="status"></div>
         
         <div class="results">
-            <h2>篩選結果</h2>
-            <div class="sort-controls" id="sortControls" style="display: none;">
-                <button class="sort-btn" data-sort="entry_score">主力進場評分</button>
-                <button class="sort-btn" data-sort="fund_trend">資金流向趨勢</button>
-                <button class="sort-btn" data-sort="change_percent">漲跌幅</button>
+            <div id="resultsContent">
+                <div class="loading">載入中，請稍候...</div>
             </div>
-            
-            <div class="table-container">
-                <table id="resultsTable">
-                    <thead>
-                        <tr>
-                            <th>代碼</th>
-                            <th>名稱</th>
-                            <th>收盤價</th>
-                            <th>漲跌幅(%)</th>
-                            <th>資金趨勢</th>
-                            <th>多空線</th>
-                            <th>進場評分</th>
-                        </tr>
-                    </thead>
-                    <tbody id="resultsBody">
-                        <tr>
-                            <td colspan="7" class="loading">
-                                <div>點擊「開始篩選」來分析股票</div>
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        
-        <div class="footer">
-            <p>&copy; 2024 台股主力資金進入篩選器 | 僅供參考，投資有風險</p>
         </div>
     </div>
 
     <script>
-        let currentData = [];
-        
-        function showStatus(message, type = 'success') {
-            const status = document.getElementById('status');
-            status.textContent = message;
-            status.className = `status ${type}`;
-            status.style.display = 'block';
+        let isUpdating = false;
+        let isScreening = false;
+
+        // 頁面載入時獲取初始資料
+        document.addEventListener('DOMContentLoaded', function() {
+            loadInitialData();
+        });
+
+        async function loadInitialData() {
+            try {
+                const response = await fetch('/api/stocks');
+                const data = await response.json();
+                
+                if (data.success) {
+                    updateTimeInfo(data.last_update, data.data_date);
+                    showStatus('系統已就緒，請點擊「更新股票資料」獲取最新資料', 'success');
+                } else {
+                    showStatus('載入初始資料失敗', 'error');
+                }
+            } catch (error) {
+                console.error('載入初始資料錯誤:', error);
+                showStatus('載入初始資料失敗', 'error');
+            }
             
-            if (type === 'success') {
-                setTimeout(() => {
-                    status.style.display = 'none';
-                }, 3000);
+            // 清除載入狀態
+            document.getElementById('resultsContent').innerHTML = '<div class="no-results">請先更新股票資料，然後開始篩選</div>';
+        }
+
+        function updateTimeInfo(lastUpdate, dataDate) {
+            const lastUpdateElement = document.getElementById('lastUpdateTime');
+            const dataDateElement = document.getElementById('dataDate');
+            
+            if (lastUpdate) {
+                const updateTime = new Date(lastUpdate);
+                lastUpdateElement.textContent = updateTime.toLocaleString('zh-TW');
+            } else {
+                lastUpdateElement.textContent = '尚未更新';
+            }
+            
+            if (dataDate) {
+                dataDateElement.textContent = dataDate;
+            } else {
+                dataDateElement.textContent = '無資料';
             }
         }
-        
-        function showLoading(message = '處理中...') {
-            const tbody = document.getElementById('resultsBody');
-            tbody.innerHTML = `
-                <tr>
-                    <td colspan="7" class="loading">
-                        <div class="spinner"></div>
-                        <div>${message}</div>
-                    </td>
-                </tr>
-            `;
-        }
-        
-        function updateStocks() {
-            const btn = document.getElementById('updateBtn');
-            btn.disabled = true;
-            btn.textContent = '更新中...';
+
+        async function updateStocks() {
+            if (isUpdating) return;
             
-            showLoading('正在更新股票資料...');
+            isUpdating = true;
+            const button = event.target;
+            button.disabled = true;
+            button.textContent = '更新中...';
             
-            fetch('/api/stocks/update', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                }
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    showStatus(data.message || '股票資料更新已開始', 'success');
-                } else {
-                    showStatus(data.message || '更新失敗', 'error');
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                showStatus('更新請求失敗', 'error');
-            })
-            .finally(() => {
-                btn.disabled = false;
-                btn.textContent = '更新股票資料';
+            try {
+                showStatus('正在從台灣證券交易所獲取最新股票資料...', 'success');
                 
-                // 清除載入狀態
-                const tbody = document.getElementById('resultsBody');
-                tbody.innerHTML = `
-                    <tr>
-                        <td colspan="7" class="loading">
-                            <div>點擊「開始篩選」來分析股票</div>
-                        </td>
-                    </tr>
-                `;
-            });
-        }
-        
-        function screenStocks() {
-            const btn = document.getElementById('screenBtn');
-            btn.disabled = true;
-            btn.textContent = '篩選中...';
-            
-            showLoading('正在分析股票資料...');
-            
-            fetch('/api/stocks/screen', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                }
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success && data.data) {
-                    currentData = data.data;
-                    displayResults(currentData);
-                    document.getElementById('sortControls').style.display = 'flex';
-                    
-                    let message = `成功篩選出 ${data.count} 支股票`;
-                    if (data.note) {
-                        message += ` (${data.note})`;
+                const response = await fetch('/api/update', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
                     }
-                    showStatus(message, 'success');
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showStatus(data.message + '，請稍候片刻後開始篩選', 'success');
+                    
+                    // 等待更新完成
+                    setTimeout(async () => {
+                        try {
+                            const stocksResponse = await fetch('/api/stocks');
+                            const stocksData = await stocksResponse.json();
+                            if (stocksData.success) {
+                                updateTimeInfo(stocksData.last_update, stocksData.data_date);
+                            }
+                        } catch (error) {
+                            console.error('更新時間資訊錯誤:', error);
+                        }
+                    }, 3000);
                 } else {
-                    showStatus(data.message || '篩選失敗', 'error');
-                    displayError('篩選失敗，請稍後再試');
+                    showStatus('更新失敗: ' + data.error, 'error');
                 }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                showStatus('篩選請求失敗', 'error');
-                displayError('網路錯誤，請檢查連線');
-            })
-            .finally(() => {
-                btn.disabled = false;
-                btn.textContent = '開始篩選';
-            });
+            } catch (error) {
+                console.error('更新股票資料錯誤:', error);
+                showStatus('更新股票資料時發生錯誤', 'error');
+            } finally {
+                isUpdating = false;
+                button.disabled = false;
+                button.textContent = '更新股票資料';
+            }
         }
-        
-        function displayResults(data) {
-            const tbody = document.getElementById('resultsBody');
+
+        async function screenStocks() {
+            if (isScreening) return;
             
-            if (!data || data.length === 0) {
-                tbody.innerHTML = `
-                    <tr>
-                        <td colspan="7" class="loading">
-                            <div>沒有找到符合條件的股票</div>
-                        </td>
-                    </tr>
+            isScreening = true;
+            const button = event.target;
+            button.disabled = true;
+            button.textContent = '篩選中...';
+            
+            try {
+                showStatus('正在使用Pine Script邏輯篩選主力進場股票...', 'success');
+                document.getElementById('resultsContent').innerHTML = '<div class="loading">正在分析股票資料...</div>';
+                
+                const response = await fetch('/api/screen', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showStatus(data.message, 'success');
+                    displayResults(data.data, data.query_time, data.data_date);
+                } else {
+                    showStatus('篩選失敗: ' + data.error, 'error');
+                    document.getElementById('resultsContent').innerHTML = '<div class="no-results">篩選失敗，請重試</div>';
+                }
+            } catch (error) {
+                console.error('篩選股票錯誤:', error);
+                showStatus('篩選股票時發生錯誤', 'error');
+                document.getElementById('resultsContent').innerHTML = '<div class="no-results">篩選失敗，請重試</div>';
+            } finally {
+                isScreening = false;
+                button.disabled = false;
+                button.textContent = '開始篩選';
+            }
+        }
+
+        function displayResults(stocks, queryTime, dataDate) {
+            const resultsContent = document.getElementById('resultsContent');
+            
+            if (!stocks || stocks.length === 0) {
+                resultsContent.innerHTML = `
+                    <div class="no-results">
+                        <h3>目前沒有股票符合Pine Script主力進場條件</h3>
+                        <p>這表示當前市場中沒有股票同時滿足以下嚴格條件：</p>
+                        <ul style="text-align: left; display: inline-block; margin-top: 10px;">
+                            <li>資金流向突破多空線（crossover）</li>
+                            <li>多空線處於超賣區（< 25）</li>
+                        </ul>
+                        <p style="margin-top: 15px; font-size: 0.9em; color: #6c757d;">
+                            查詢時間: ${new Date(queryTime).toLocaleString('zh-TW')}<br>
+                            資料日期: ${dataDate}
+                        </p>
+                    </div>
                 `;
                 return;
             }
             
-            tbody.innerHTML = data.map(stock => `
-                <tr>
-                    <td>${stock.code || '---'}</td>
-                    <td>${stock.name || '---'}</td>
-                    <td>${stock.close_price ? stock.close_price.toFixed(2) : '---'}</td>
-                    <td style="color: ${(stock.change_percent || 0) >= 0 ? '#28a745' : '#dc3545'}">
-                        ${stock.change_percent ? stock.change_percent.toFixed(2) : '---'}%
-                    </td>
-                    <td>${stock.fund_trend || '---'}</td>
-                    <td>${stock.multi_short_line || '---'}</td>
-                    <td style="font-weight: bold; color: #667eea;">
-                        ${stock.entry_score || '---'}
-                    </td>
-                </tr>
-            `).join('');
-        }
-        
-        function displayError(message) {
-            const tbody = document.getElementById('resultsBody');
-            tbody.innerHTML = `
-                <tr>
-                    <td colspan="7" class="loading">
-                        <div style="color: #dc3545;">${message}</div>
-                    </td>
-                </tr>
+            let tableHTML = `
+                <h2>篩選結果 (${stocks.length} 支股票)</h2>
+                <p style="margin-bottom: 20px; color: #6c757d;">
+                    查詢時間: ${new Date(queryTime).toLocaleString('zh-TW')} | 資料日期: ${dataDate}
+                </p>
+                <table class="stock-table">
+                    <thead>
+                        <tr>
+                            <th>股票代碼</th>
+                            <th>股票名稱</th>
+                            <th>股價</th>
+                            <th>漲跌幅</th>
+                            <th>資金流向</th>
+                            <th>多空線</th>
+                            <th>訊號狀態</th>
+                            <th>評分</th>
+                            <th>價格日期</th>
+                        </tr>
+                    </thead>
+                    <tbody>
             `;
-        }
-        
-        function sortData(field) {
-            if (!currentData || currentData.length === 0) return;
             
-            currentData.sort((a, b) => {
-                const aVal = a[field] || 0;
-                const bVal = b[field] || 0;
+            stocks.forEach(stock => {
+                const changeClass = stock.change_percent >= 0 ? 'change-positive' : 'change-negative';
+                const changeSymbol = stock.change_percent >= 0 ? '+' : '';
                 
-                if (typeof aVal === 'number' && typeof bVal === 'number') {
-                    return bVal - aVal; // 降序
+                let signalClass = '';
+                switch(stock.signal_status) {
+                    case '主力進場':
+                        signalClass = 'signal-entry';
+                        break;
+                    case '主力增倉':
+                        signalClass = 'signal-increase';
+                        break;
+                    case '主力減倉':
+                        signalClass = 'signal-decrease';
+                        break;
+                    case '主力退場':
+                        signalClass = 'signal-exit';
+                        break;
+                    default:
+                        signalClass = 'signal-exit';
                 }
                 
-                return String(bVal).localeCompare(String(aVal));
+                let scoreClass = '';
+                if (stock.score >= 80) {
+                    scoreClass = 'score-high';
+                } else if (stock.score >= 60) {
+                    scoreClass = 'score-medium';
+                } else {
+                    scoreClass = 'score-low';
+                }
+                
+                tableHTML += `
+                    <tr>
+                        <td class="stock-code">${stock.code}</td>
+                        <td class="stock-name">${stock.name}</td>
+                        <td class="price">$${stock.price.toFixed(2)}</td>
+                        <td class="${changeClass}">${changeSymbol}${stock.change_percent.toFixed(2)}%</td>
+                        <td>${stock.fund_trend}</td>
+                        <td>${stock.multi_short_line}</td>
+                        <td><span class="signal-status ${signalClass}">${stock.signal_status}</span></td>
+                        <td class="score ${scoreClass}">${stock.score}</td>
+                        <td class="date-info">${stock.date}</td>
+                    </tr>
+                `;
             });
             
-            displayResults(currentData);
+            tableHTML += `
+                    </tbody>
+                </table>
+            `;
             
-            // 更新按鈕狀態
-            document.querySelectorAll('.sort-btn').forEach(btn => {
-                btn.classList.remove('active');
-            });
-            document.querySelector(`[data-sort="${field}"]`).classList.add('active');
+            resultsContent.innerHTML = tableHTML;
         }
-        
-        // 事件監聽器
-        document.getElementById('updateBtn').addEventListener('click', updateStocks);
-        document.getElementById('screenBtn').addEventListener('click', screenStocks);
-        
-        // 排序按鈕事件
-        document.querySelectorAll('.sort-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                sortData(btn.dataset.sort);
-            });
-        });
-        
-        // 頁面載入完成後檢查系統狀態
-        document.addEventListener('DOMContentLoaded', function() {
-            fetch('/health')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.initialization_status === 'failed') {
-                        showStatus('系統以降級模式運行，部分功能可能受限', 'warning');
-                    }
-                })
-                .catch(error => {
-                    console.log('Health check failed:', error);
-                });
-        });
+
+        function showStatus(message, type = 'success') {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+            statusDiv.style.display = 'block';
+            
+            // 3秒後自動隱藏
+            setTimeout(() => {
+                statusDiv.style.display = 'none';
+            }, 3000);
+        }
     </script>
 </body>
 </html>

@@ -3,9 +3,10 @@ from flask_cors import CORS
 import logging
 import threading
 import time
-from datetime import datetime
-import random
-import math
+import os
+from datetime import datetime, timedelta
+import requests
+import json
 
 # 設定日誌
 logging.basicConfig(level=logging.INFO)
@@ -18,6 +19,7 @@ CORS(app)
 stocks_data = {}
 is_updating = False
 last_update_time = None
+data_date = None  # 資料日期
 
 def get_default_stock_list():
     """獲取預設股票清單"""
@@ -55,6 +57,147 @@ def get_stock_name_by_code(stock_code):
         if stock['stock_id'] == stock_code:
             return stock['stock_name']
     return f"股票{stock_code}"
+
+def get_latest_trading_date():
+    """獲取最近的交易日期（排除週末）"""
+    today = datetime.now()
+    
+    # 如果是週六(5)或週日(6)，回推到週五
+    if today.weekday() == 5:  # 週六
+        trading_date = today - timedelta(days=1)  # 週五
+    elif today.weekday() == 6:  # 週日
+        trading_date = today - timedelta(days=2)  # 週五
+    else:
+        # 平日，使用前一個交易日
+        trading_date = today - timedelta(days=1)
+    
+    return trading_date.strftime('%Y%m%d')
+
+def fetch_real_stock_data():
+    """從台灣證券交易所API獲取真實股票資料"""
+    try:
+        # 台灣證券交易所OpenAPI
+        url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+        
+        logger.info(f"正在從證交所API獲取股票資料: {url}")
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+        
+        data = response.json()
+        logger.info(f"成功獲取證交所資料，共 {len(data)} 筆記錄")
+        
+        # 處理資料格式
+        processed_data = {}
+        target_stocks = [stock['stock_id'] for stock in get_default_stock_list()]
+        
+        for item in data:
+            stock_code = item.get('Code', '').strip()
+            if stock_code in target_stocks:
+                try:
+                    # 解析數值，處理可能的逗號分隔符
+                    opening_price = float(item.get('OpeningPrice', '0').replace(',', ''))
+                    highest_price = float(item.get('HighestPrice', '0').replace(',', ''))
+                    lowest_price = float(item.get('LowestPrice', '0').replace(',', ''))
+                    closing_price = float(item.get('ClosingPrice', '0').replace(',', ''))
+                    trade_volume = int(item.get('TradeVolume', '0').replace(',', ''))
+                    
+                    # 計算漲跌幅
+                    change_str = item.get('Change', '0').replace(',', '')
+                    if change_str.startswith('+'):
+                        change = float(change_str[1:])
+                    elif change_str.startswith('-'):
+                        change = -float(change_str[1:])
+                    else:
+                        change = float(change_str) if change_str else 0
+                    
+                    change_percent = (change / (closing_price - change)) * 100 if (closing_price - change) != 0 else 0
+                    
+                    processed_data[stock_code] = {
+                        'name': get_stock_name_by_code(stock_code),
+                        'open': opening_price,
+                        'high': highest_price,
+                        'low': lowest_price,
+                        'close': closing_price,
+                        'volume': trade_volume,
+                        'change': change,
+                        'change_percent': change_percent,
+                        'date': item.get('Date', get_latest_trading_date())
+                    }
+                    
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"處理股票 {stock_code} 資料時發生錯誤: {e}")
+                    continue
+        
+        logger.info(f"成功處理 {len(processed_data)} 支目標股票資料")
+        return processed_data
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"獲取證交所資料失敗: {e}")
+        return None
+    except json.JSONDecodeError as e:
+        logger.error(f"解析證交所資料失敗: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"處理證交所資料時發生未知錯誤: {e}")
+        return None
+
+def fetch_historical_data_for_indicators(stock_code, days=60):
+    """獲取歷史資料用於技術指標計算（使用Yahoo Finance API）"""
+    try:
+        # 使用Manus API Hub的Yahoo Finance API
+        import sys
+        sys.path.append('/opt/.manus/.sandbox-runtime')
+        from data_api import ApiClient
+        
+        client = ApiClient()
+        
+        # 台股代碼需要加上.TW後綴
+        symbol = f"{stock_code}.TW"
+        
+        response = client.call_api('YahooFinance/get_stock_chart', query={
+            'symbol': symbol,
+            'region': 'TW',
+            'interval': '1d',
+            'range': '3mo',  # 3個月歷史資料
+            'includeAdjustedClose': True
+        })
+        
+        if not response or 'chart' not in response or 'result' not in response['chart']:
+            logger.warning(f"無法獲取 {stock_code} 的歷史資料")
+            return None
+        
+        result = response['chart']['result'][0]
+        timestamps = result['timestamp']
+        quotes = result['indicators']['quote'][0]
+        
+        # 轉換為OHLC格式
+        ohlc_data = []
+        for i in range(len(timestamps)):
+            if (quotes['open'][i] is not None and 
+                quotes['high'][i] is not None and 
+                quotes['low'][i] is not None and 
+                quotes['close'][i] is not None):
+                
+                ohlc_data.append({
+                    'date': datetime.fromtimestamp(timestamps[i]).strftime('%Y-%m-%d'),
+                    'open': quotes['open'][i],
+                    'high': quotes['high'][i],
+                    'low': quotes['low'][i],
+                    'close': quotes['close'][i],
+                    'volume': quotes['volume'][i] if quotes['volume'][i] else 0
+                })
+        
+        logger.info(f"成功獲取 {stock_code} 的 {len(ohlc_data)} 天歷史資料")
+        return ohlc_data[-days:] if len(ohlc_data) > days else ohlc_data
+        
+    except Exception as e:
+        logger.warning(f"獲取 {stock_code} 歷史資料失敗: {e}")
+        return None
 
 def calculate_weighted_simple_average(values, length, weight):
     """計算加權簡單平均（模擬Pine Script函數）"""
@@ -155,283 +298,220 @@ def calculate_pine_script_indicators(ohlc_data):
     
     return None, None, False
 
-def generate_realistic_ohlc_data(stock_code, days=50):
-    """生成更真實的OHLC歷史數據"""
-    # 基於股票代碼生成相對穩定的基礎價格
-    base_price = hash(stock_code) % 500 + 50  # 50-550的基礎價格
-    
-    ohlc_data = []
-    current_price = base_price
-    
-    for i in range(days):
-        # 生成相對真實的日內波動
-        daily_volatility = random.uniform(0.02, 0.08)  # 2-8%的日波動
-        direction = random.choice([-1, 1])
-        
-        # 計算當日OHLC
-        open_price = current_price * (1 + random.uniform(-0.02, 0.02))
-        
-        high_low_range = open_price * daily_volatility
-        high_price = open_price + random.uniform(0, high_low_range)
-        low_price = open_price - random.uniform(0, high_low_range)
-        
-        close_price = open_price * (1 + direction * random.uniform(0, daily_volatility))
-        close_price = max(low_price, min(high_price, close_price))  # 確保在high-low範圍內
-        
-        ohlc_data.append({
-            'open': round(open_price, 2),
-            'high': round(high_price, 2),
-            'low': round(low_price, 2),
-            'close': round(close_price, 2)
-        })
-        
-        current_price = close_price
-    
-    return ohlc_data
-
 def get_stock_web_data(stock_code, stock_name=None):
-    """獲取股票資料（完全符合Pine Script邏輯版）"""
+    """獲取股票的完整資料（結合即時資料和技術指標）"""
     try:
-        # 確保包含股票名稱
-        if not stock_name:
-            stock_name = get_stock_name_by_code(stock_code)
+        # 獲取即時資料
+        if stock_code not in stocks_data:
+            logger.warning(f"股票 {stock_code} 沒有即時資料")
+            return None
         
-        # 生成歷史OHLC數據
-        ohlc_data = generate_realistic_ohlc_data(stock_code, 50)
+        current_data = stocks_data[stock_code]
         
-        # 計算Pine Script指標
-        fund_flow_trend, bull_bear_line, banker_entry_signal = calculate_pine_script_indicators(ohlc_data)
+        # 獲取歷史資料用於技術指標計算
+        historical_data = fetch_historical_data_for_indicators(stock_code)
         
-        if fund_flow_trend is None:
-            # 如果計算失敗，返回預設值
-            fund_flow_trend = 50
-            bull_bear_line = 50
-            banker_entry_signal = False
+        if historical_data and len(historical_data) >= 34:
+            # 將當日資料加入歷史資料
+            today_data = {
+                'date': current_data['date'],
+                'open': current_data['open'],
+                'high': current_data['high'],
+                'low': current_data['low'],
+                'close': current_data['close'],
+                'volume': current_data['volume']
+            }
+            
+            # 檢查是否已經包含當日資料
+            if not historical_data or historical_data[-1]['date'] != today_data['date']:
+                historical_data.append(today_data)
+            
+            # 計算Pine Script技術指標
+            fund_flow_trend, bull_bear_line, banker_entry_signal = calculate_pine_script_indicators(historical_data)
+            
+            if fund_flow_trend is not None:
+                # 根據技術指標判斷狀態
+                if banker_entry_signal:
+                    signal_status = "主力進場"
+                    score = 100
+                elif fund_flow_trend > bull_bear_line:
+                    signal_status = "主力增倉"
+                    score = 85
+                elif fund_flow_trend < bull_bear_line - 5:
+                    signal_status = "主力減倉"
+                    score = 40
+                elif fund_flow_trend < bull_bear_line:
+                    signal_status = "主力退場"
+                    score = 20
+                else:
+                    signal_status = "弱反彈"
+                    score = 60
+                
+                return {
+                    'name': stock_name or current_data['name'],
+                    'price': current_data['close'],
+                    'change_percent': current_data['change_percent'],
+                    'fund_trend': f"{fund_flow_trend:.2f}",
+                    'multi_short_line': f"{bull_bear_line:.2f}",
+                    'signal_status': signal_status,
+                    'score': score,
+                    'date': current_data['date']
+                }
         
-        # 計算當日漲跌幅
-        if len(ohlc_data) >= 2:
-            today_close = ohlc_data[-1]['close']
-            yesterday_close = ohlc_data[-2]['close']
-            change_percent = ((today_close - yesterday_close) / yesterday_close) * 100
-        else:
-            change_percent = 0
-        
-        # 根據Pine Script邏輯判斷主力狀態
-        if banker_entry_signal:
-            fund_status = '主力進場'  # 黃色蠟燭
-            entry_signal_strength = 95
-            fund_trend = '流入'
-        elif fund_flow_trend > bull_bear_line:
-            fund_status = '主力增倉'  # 綠色蠟燭
-            entry_signal_strength = 85
-            fund_trend = '流入'
-        elif fund_flow_trend < bull_bear_line:
-            fund_status = '主力退場'  # 紅色蠟燭
-            entry_signal_strength = 30
-            fund_trend = '流出'
-        else:
-            fund_status = '主力觀望'
-            entry_signal_strength = 50
-            fund_trend = '持平'
-        
-        # 多空線狀態
-        if bull_bear_line > 75:
-            multi_short_line = '多頭'
-        elif bull_bear_line < 25:
-            multi_short_line = '空頭'
-        else:
-            multi_short_line = '盤整'
-        
+        # 如果無法計算技術指標，返回基本資料
+        logger.warning(f"股票 {stock_code} 歷史資料不足，無法計算技術指標")
         return {
-            'code': stock_code,
-            'name': stock_name,
-            'close_price': round(ohlc_data[-1]['close'], 2),
-            'change_percent': round(change_percent, 2),
-            'volume': random.randint(1000, 100000),
-            'fund_trend': fund_trend,
-            'multi_short_line': multi_short_line,
-            'entry_score': entry_signal_strength,
-            # Pine Script 特有指標
-            'fund_flow_trend': round(fund_flow_trend, 2),
-            'bull_bear_line': round(bull_bear_line, 2),
-            'banker_entry_signal': banker_entry_signal,
-            'fund_status': fund_status,
-            'ohlc_data': ohlc_data[-5:]  # 保留最近5天數據供調試
+            'name': stock_name or current_data['name'],
+            'price': current_data['close'],
+            'change_percent': current_data['change_percent'],
+            'fund_trend': "資料不足",
+            'multi_short_line': "資料不足",
+            'signal_status': "資料不足",
+            'score': 0,
+            'date': current_data['date']
         }
+        
     except Exception as e:
-        logger.error(f"獲取股票 {stock_code} 資料失敗: {e}")
+        logger.error(f"獲取股票 {stock_code} 資料時發生錯誤: {e}")
         return None
+
+def update_stocks_data():
+    """更新股票資料"""
+    global stocks_data, is_updating, last_update_time, data_date
+    
+    if is_updating:
+        logger.info("股票資料更新已在進行中，跳過此次更新")
+        return
+    
+    is_updating = True
+    logger.info("開始更新股票資料...")
+    
+    try:
+        # 獲取真實股票資料
+        real_data = fetch_real_stock_data()
+        
+        if real_data:
+            stocks_data = real_data
+            last_update_time = datetime.now()
+            
+            # 設定資料日期（使用第一支股票的日期）
+            if stocks_data:
+                first_stock = next(iter(stocks_data.values()))
+                data_date = first_stock.get('date', get_latest_trading_date())
+            
+            logger.info(f"股票資料更新完成，共更新 {len(stocks_data)} 支股票")
+        else:
+            logger.error("無法獲取真實股票資料")
+            
+    except Exception as e:
+        logger.error(f"更新股票資料時發生錯誤: {e}")
+    finally:
+        is_updating = False
 
 @app.route('/')
 def index():
-    """主頁面"""
+    """首頁"""
     return render_template('index.html')
 
-@app.route('/api/stocks/list')
-def get_stocks_list():
-    """獲取股票清單API"""
+@app.route('/api/stocks')
+def get_stocks():
+    """獲取股票清單"""
     try:
         stock_list = get_default_stock_list()
         return jsonify({
             'success': True,
             'data': stock_list,
-            'count': len(stock_list)
+            'last_update': last_update_time.isoformat() if last_update_time else None,
+            'data_date': data_date
         })
     except Exception as e:
-        logger.error(f"獲取股票清單API錯誤: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'data': []
-        }), 500
+        logger.error(f"獲取股票清單時發生錯誤: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
-@app.route('/api/stocks/update', methods=['POST'])
+@app.route('/api/update', methods=['POST'])
 def update_stocks():
-    """更新股票資料API"""
-    global is_updating, last_update_time, stocks_data
-    
+    """更新股票資料"""
     try:
-        if is_updating:
-            return jsonify({
-                'success': False,
-                'message': '股票資料更新進行中，請稍後再試'
-            })
-        
-        is_updating = True
-        
-        def update_task():
-            global is_updating, last_update_time, stocks_data
-            try:
-                logger.info("開始更新股票資料...")
-                
-                # 獲取股票清單
-                stock_list = get_default_stock_list()
-                
-                # 更新股票資料
-                stocks_data = {}
-                for stock in stock_list:
-                    stock_code = stock['stock_id']
-                    stock_name = stock['stock_name']
-                    stock_data = get_stock_web_data(stock_code, stock_name)
-                    if stock_data:
-                        stocks_data[stock_code] = stock_data
-                    
-                    # 模擬處理時間
-                    time.sleep(0.1)
-                
-                last_update_time = datetime.now()
-                logger.info(f"股票資料更新完成，共 {len(stocks_data)} 支股票")
-                
-            except Exception as e:
-                logger.error(f"更新股票資料時發生錯誤: {e}")
-            finally:
-                is_updating = False
-        
-        # 啟動背景任務
-        threading.Thread(target=update_task, daemon=True).start()
+        # 在背景執行更新
+        thread = threading.Thread(target=update_stocks_data)
+        thread.daemon = True
+        thread.start()
         
         return jsonify({
             'success': True,
             'message': '股票資料更新已開始'
         })
-        
     except Exception as e:
-        is_updating = False
-        logger.error(f"更新股票資料API錯誤: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'message': '更新股票資料時發生錯誤'
-        }), 500
+        logger.error(f"啟動股票資料更新時發生錯誤: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
-@app.route('/api/stocks/screen', methods=['POST'])
+@app.route('/api/screen', methods=['POST'])
 def screen_stocks():
-    """篩選股票API - 完全符合Pine Script邏輯"""
+    """篩選股票"""
     try:
-        # 如果沒有資料，先生成一些
-        if not stocks_data:
-            stock_list = get_default_stock_list()
-            for stock in stock_list:
-                stock_code = stock['stock_id']
-                stock_name = stock['stock_name']
-                stock_data = get_stock_web_data(stock_code, stock_name)
-                if stock_data:
-                    stock_data['name'] = stock_name
-                    stocks_data[stock_code] = stock_data
+        current_time = datetime.now()
         
-        # 篩選主力進場股票 - 嚴格按照Pine Script邏輯
-        results = []
-        for code, data in stocks_data.items():
-            # 只篩選真正的主力進場信號（黃色蠟燭）
-            banker_entry_signal = data.get('banker_entry_signal', False)
+        # 檢查是否有股票資料
+        if not stocks_data:
+            return jsonify({
+                'success': False,
+                'error': '請先更新股票資料'
+            }), 400
+        
+        # 獲取所有股票的完整資料
+        all_stocks_data = []
+        target_stocks = [stock['stock_id'] for stock in get_default_stock_list()]
+        
+        for stock_code in target_stocks:
+            stock_name = get_stock_name_by_code(stock_code)
+            stock_data = get_stock_web_data(stock_code, stock_name)
             
-            # 嚴格條件：只有真正的crossover + 超賣區才算主力進場
-            if banker_entry_signal:
-                stock_name = data.get('name', '')
-                if not stock_name:
-                    stock_name = get_stock_name_by_code(code)
-                
-                results.append({
-                    'code': data.get('code', code),
-                    'name': stock_name,
-                    'close_price': data.get('close_price', 0),
-                    'change_percent': data.get('change_percent', 0),
-                    'fund_trend': data.get('fund_trend', '持平'),
-                    'multi_short_line': data.get('multi_short_line', '盤整'),
-                    'entry_score': 100,  # 真正的主力進場信號給最高分
-                    'signal_type': '主力進場',
-                    'fund_flow_trend': data.get('fund_flow_trend', 0),
-                    'bull_bear_line': data.get('bull_bear_line', 0),
-                    'crossover_confirmed': True
+            if stock_data:
+                all_stocks_data.append({
+                    'code': stock_code,
+                    **stock_data
                 })
         
+        # 篩選符合Pine Script主力進場條件的股票
+        filtered_stocks = []
+        for stock in all_stocks_data:
+            if stock['signal_status'] in ['主力進場', '主力增倉']:
+                filtered_stocks.append(stock)
+        
         # 按評分排序
-        results.sort(key=lambda x: x.get('entry_score', 0), reverse=True)
+        filtered_stocks.sort(key=lambda x: x['score'], reverse=True)
         
         return jsonify({
             'success': True,
-            'data': results,
-            'count': len(results),
-            'note': f'篩選出 {len(results)} 支真正符合Pine Script主力進場條件的股票',
-            'criteria': 'Pine Script嚴格邏輯：crossover(fund_flow_trend, bull_bear_line) AND bull_bear_line < 25'
+            'data': filtered_stocks,
+            'total': len(filtered_stocks),
+            'message': f'篩選出 {len(filtered_stocks)} 支符合Pine Script主力進場條件的股票（基於真實市場資料）',
+            'query_time': current_time.isoformat(),
+            'data_date': data_date
         })
         
     except Exception as e:
-        logger.error(f"篩選股票API錯誤: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'message': '篩選股票時發生錯誤',
-            'data': []
-        }), 500
+        logger.error(f"篩選股票時發生錯誤: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
-@app.route('/api/task/status')
-def get_task_status():
-    """獲取任務狀態"""
-    return jsonify({
-        'is_updating': is_updating,
-        'last_update_time': last_update_time.isoformat() if last_update_time else None,
-        'stocks_count': len(stocks_data),
-        'initialization_status': 'success'
-    })
-
-@app.route('/health')
+@app.route('/api/health')
 def health_check():
-    """健康檢查端點"""
+    """健康檢查"""
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
-        'version': 'Pine Script Accurate Logic v1.0'
+        'stocks_count': len(stocks_data),
+        'last_update': last_update_time.isoformat() if last_update_time else None,
+        'data_date': data_date,
+        'is_updating': is_updating
     })
 
 if __name__ == '__main__':
-    import os
+    # 啟動時更新一次股票資料
+    logger.info("應用啟動，開始初始化股票資料...")
+    update_stocks_data()
     
-    logger.info("台股主力資金進入篩選器啟動中...")
-    logger.info("Pine Script完全準確邏輯版本")
-    
+    # 啟動Flask應用 - 適配Render環境
     port = int(os.environ.get('PORT', 10000))
-    logger.info(f"啟動台股主力資金進入篩選器，端口: {port}")
-    
     app.run(host='0.0.0.0', port=port, debug=False)
 

@@ -1,70 +1,145 @@
-# 台股主力資金進入篩選器 - Python 3.13兼容版
+# 台股主力資金進入篩選器 - Render部署版本
 
-## 專案簡介
-這是專為Python 3.13設計的台股主力資金進入篩選器，解決了lxml和pandas在Python 3.13環境下的兼容性問題。
+## 🎯 系統概述
 
-## 主要特色
-- ✅ **Python 3.13完全兼容** - 移除有問題的依賴套件
-- ✅ **輕量化設計** - 僅使用Flask、requests、beautifulsoup4
-- ✅ **Render平台優化** - 專為Render免費方案設計
-- ✅ **移除undefined顯示** - 優化前端用戶體驗
-- ✅ **無過度保護機制** - 用戶可隨時更新資料
+這是一個基於真實台股資料的Pine Script主力進場篩選系統，使用台灣證券交易所官方API提供準確的技術分析結果。
 
-## 解決的問題
-### Python 3.13兼容性問題
-- **lxml編譯失敗** - 移除lxml依賴，使用beautifulsoup4
-- **pandas版本衝突** - 移除pandas，使用原生Python資料結構
-- **套件依賴複雜** - 簡化為最小必要依賴
+## 🚀 Render部署指南
 
-## 技術架構
-- **後端**: Flask 3.0.0 + Python 3.13
-- **前端**: HTML5 + CSS3 + JavaScript
-- **資料處理**: 原生Python + requests + beautifulsoup4
-- **部署平台**: Render
+### 1. 準備工作
+- 確保您有Render帳號 (https://render.com)
+- 將此專案上傳到GitHub倉庫
 
-## Render部署設定
+### 2. 在Render創建Web Service
+1. 登入Render控制台
+2. 點擊「New +」→「Web Service」
+3. 連接您的GitHub倉庫
+4. 選擇此專案的倉庫
+
+### 3. 部署設定
 ```
+Name: taiwan-stock-screener
+Environment: Python 3.12
+Region: 選擇最近的區域
+Branch: main (或您的主分支)
+
 Build Command: pip install -r requirements.txt
-Start Command: python app.py
-Environment: Python 3
-Region: Singapore (推薦)
+Start Command: gunicorn app:app
+
+Instance Type: Free (或根據需求選擇)
 ```
 
-## 依賴套件
+### 4. 環境變數 (可選)
+如需設定特殊環境變數，可在Render控制台的Environment頁面添加：
 ```
-Flask==3.0.0
-Flask-CORS==4.0.0
-requests==2.31.0
-beautifulsoup4==4.12.2
+PORT: (Render會自動設定，無需手動添加)
 ```
 
-## 功能說明
-1. **股票資料更新** - 支援25支主要台股
-2. **主力資金篩選** - 智能分析主力進場信號
-3. **即時排序** - 支援多種排序方式
-4. **響應式設計** - 支援各種裝置
+### 5. 部署完成
+- Render會自動開始建置和部署
+- 部署成功後會提供一個 `.onrender.com` 的URL
+- 首次啟動可能需要幾分鐘來初始化股票資料
 
-## API端點
-- `GET /` - 主頁面
-- `POST /api/stocks/update` - 更新股票資料
-- `POST /api/stocks/screen` - 篩選股票
-- `GET /api/task/status` - 獲取任務狀態
-- `GET /health` - 健康檢查
+## 📋 功能特色
 
-## 版本資訊
-- **版本**: 1.0.2-python313
-- **Python版本**: 3.13兼容
-- **更新日期**: 2024
-- **修復項目**: Python 3.13兼容性問題
+### 真實資料來源
+- **台灣證券交易所API**: 官方權威的股票交易資料
+- **Yahoo Finance API**: 歷史資料支援技術指標計算
+- **即時更新**: 支援手動更新最新市場資料
 
-## 部署成功率
-- ✅ **Python 3.13**: 100%兼容
-- ✅ **Render平台**: 完全支援
-- ✅ **依賴安裝**: 無編譯錯誤
-- ✅ **功能正常**: 所有API正常運作
+### Pine Script技術分析
+- **資金流向趨勢**: 基於27期高低價計算
+- **多空線**: 使用34期高低價和13期EMA
+- **主力進場條件**: 
+  - 資金流向突破多空線 (crossover)
+  - 多空線處於超賣區 (< 25)
 
-## 注意事項
-- 本系統僅供參考，投資有風險
-- 在Render免費方案下，30分鐘無活動會自動休眠
-- 系統具備keep-alive機制，減少休眠頻率
+### 系統特性
+- **響應式設計**: 支援桌面和行動裝置
+- **CORS支援**: 允許跨域請求
+- **錯誤處理**: 完善的異常處理機制
+- **背景更新**: 非阻塞的資料更新
+
+## 🔧 本地開發
+
+### 安裝依賴
+```bash
+pip install -r requirements.txt
+```
+
+### 啟動應用
+```bash
+python app.py
+```
+
+### 訪問應用
+```
+http://localhost:10000
+```
+
+## 📊 使用方式
+
+1. **更新股票資料**: 點擊「更新股票資料」按鈕獲取最新的台股資料
+2. **開始篩選**: 點擊「開始篩選」按鈕執行Pine Script分析
+3. **查看結果**: 系統會顯示符合主力進場條件的股票清單
+
+## 🔍 技術架構
+
+### 後端 (Flask)
+- **API端點**: 
+  - `GET /` - 主頁面
+  - `GET /api/stocks` - 獲取股票清單
+  - `POST /api/update` - 更新股票資料
+  - `POST /api/screen` - 篩選股票
+  - `GET /api/health` - 健康檢查
+
+### 前端 (HTML/CSS/JavaScript)
+- **響應式設計**: Bootstrap風格的現代化介面
+- **即時更新**: JavaScript處理API呼叫和結果顯示
+- **狀態管理**: 載入狀態和錯誤處理
+
+### 資料處理
+- **證交所API**: 獲取當日股票交易資料
+- **Yahoo Finance API**: 獲取歷史資料用於技術指標計算
+- **Pine Script邏輯**: 完整實現技術分析算法
+
+## ⚠️ 注意事項
+
+### 資料限制
+- 證交所API提供前一交易日的資料
+- 週末和假日無新資料更新
+- 首次啟動需要時間初始化資料
+
+### 效能考量
+- 建議在交易日開盤前更新資料
+- 避免頻繁更新造成API負載
+- Render免費方案有使用時間限制
+
+### 投資風險
+- 本系統僅供技術分析參考
+- 投資決策請自行承擔風險
+- 建議結合其他分析工具使用
+
+## 🆘 故障排除
+
+### 常見問題
+1. **部署失敗**: 檢查requirements.txt是否正確
+2. **無法獲取資料**: 檢查網路連接和API狀態
+3. **篩選無結果**: 這是正常現象，表示當前無股票符合嚴格條件
+
+### 日誌檢查
+在Render控制台的Logs頁面可以查看詳細的運行日誌。
+
+## 📞 技術支援
+
+如遇到技術問題，請檢查：
+1. Render部署日誌
+2. API連接狀態
+3. 資料更新時間
+
+---
+
+**版本**: 真實資料版本 (Python 3.12)  
+**更新日期**: 2025-07-27  
+**適用平台**: Render.com
 
