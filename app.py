@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-台股主力資金進入篩選器 - Python 3.13兼容版本
+台股主力資金進入篩選器 - 修正股票名稱顯示問題版本
 """
 
 import os
@@ -59,7 +59,15 @@ def get_default_stock_list():
         {'stock_id': '1216', 'stock_name': '統一'}
     ]
 
-def get_stock_web_data(stock_code):
+def get_stock_name_by_code(stock_code):
+    """根據股票代碼獲取股票名稱"""
+    stock_list = get_default_stock_list()
+    for stock in stock_list:
+        if stock['stock_id'] == stock_code:
+            return stock['stock_name']
+    return f"股票{stock_code}"  # 如果找不到，返回預設名稱
+
+def get_stock_web_data(stock_code, stock_name=None):
     """從網路獲取股票資料（簡化版）"""
     try:
         # 這裡可以實作真實的API調用
@@ -69,8 +77,13 @@ def get_stock_web_data(stock_code):
         base_price = random.uniform(50, 1000)
         change_percent = random.uniform(-5, 8)
         
+        # 確保包含股票名稱
+        if not stock_name:
+            stock_name = get_stock_name_by_code(stock_code)
+        
         return {
             'code': stock_code,
+            'name': stock_name,  # 確保包含名稱
             'close_price': round(base_price, 2),
             'change_percent': round(change_percent, 2),
             'volume': random.randint(1000, 100000),
@@ -132,7 +145,8 @@ def update_stocks():
                 stocks_data = {}
                 for stock in stock_list:
                     stock_code = stock['stock_id']
-                    stock_data = get_stock_web_data(stock_code)
+                    stock_name = stock['stock_name']
+                    stock_data = get_stock_web_data(stock_code, stock_name)
                     if stock_data:
                         stocks_data[stock_code] = stock_data
                     
@@ -171,20 +185,27 @@ def screen_stocks():
         # 如果沒有資料，先生成一些
         if not stocks_data:
             stock_list = get_default_stock_list()
-            for stock in stock_list[:10]:  # 只處理前10支
+            for stock in stock_list:  # 處理所有股票
                 stock_code = stock['stock_id']
-                stock_data = get_stock_web_data(stock_code)
+                stock_name = stock['stock_name']
+                stock_data = get_stock_web_data(stock_code, stock_name)
                 if stock_data:
-                    stock_data['name'] = stock['stock_name']
+                    # 確保名稱正確設定
+                    stock_data['name'] = stock_name
                     stocks_data[stock_code] = stock_data
         
         # 篩選主力進場股票
         results = []
         for code, data in stocks_data.items():
             if data.get('entry_score', 0) >= 70:  # 評分70以上
+                # 確保名稱欄位不為空
+                stock_name = data.get('name', '')
+                if not stock_name:
+                    stock_name = get_stock_name_by_code(code)
+                
                 results.append({
                     'code': data.get('code', code),
-                    'name': data.get('name', ''),
+                    'name': stock_name,  # 確保名稱不為空
                     'close_price': data.get('close_price', 0),
                     'change_percent': data.get('change_percent', 0),
                     'fund_trend': data.get('fund_trend', '持平'),
@@ -229,18 +250,19 @@ def health_check():
         'timestamp': datetime.now().isoformat(),
         'service': 'taiwan-stock-screener',
         'python_version': '3.13-compatible',
-        'initialization_status': 'success'
+        'initialization_status': 'success',
+        'version': 'fixed-names'
     })
 
 @app.route('/version')
 def version():
     """版本資訊"""
     return jsonify({
-        'version': '1.0.2-python313',
+        'version': '1.0.3-fixed-names',
         'service': 'taiwan-stock-screener',
         'platform': 'render',
         'python_version': '3.13-compatible',
-        'features': ['python313-compatible', 'no-pandas', 'no-lxml']
+        'features': ['python313-compatible', 'no-pandas', 'no-lxml', 'fixed-stock-names']
     })
 
 @app.errorhandler(404)
@@ -290,7 +312,7 @@ if __name__ == '__main__':
     DEBUG = os.environ.get('DEBUG', 'False').lower() == 'true'
     
     logger.info("台股主力資金進入篩選器啟動中...")
-    logger.info("Python 3.13兼容版本")
+    logger.info("Python 3.13兼容版本 - 修正股票名稱顯示")
     
     # 啟動keep-alive線程（僅在Render環境）
     if os.environ.get('RENDER'):
