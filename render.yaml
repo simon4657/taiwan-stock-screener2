@@ -2,11 +2,8 @@ services:
   - type: web
     name: taiwan-stock-screener
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install --no-cache-dir -r requirements.txt
     startCommand: gunicorn app:app
     plan: free
     healthCheckPath: /api/health
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.12
 
