@@ -68,18 +68,67 @@ def get_stock_name_by_code(stock_code):
     return f"股票{stock_code}"  # 如果找不到，返回預設名稱
 
 def get_stock_web_data(stock_code, stock_name=None):
-    """從網路獲取股票資料（簡化版）"""
+    """從網路獲取股票資料（修正Pine Script邏輯版）"""
     try:
         # 這裡可以實作真實的API調用
-        # 目前使用模擬資料
+        # 目前使用模擬資料，但遵循修正的Pine Script邏輯
         import random
         
         base_price = random.uniform(50, 1000)
-        change_percent = random.uniform(-5, 8)
         
         # 確保包含股票名稱
         if not stock_name:
             stock_name = get_stock_name_by_code(stock_code)
+        
+        # 修正Pine Script的指標計算 - 更合理的邏輯
+        fund_flow_trend = random.uniform(0, 100)  # 資金流向趨勢 (0-100)
+        bull_bear_line = random.uniform(0, 100)   # 多空線 (0-100)
+        
+        # 修正主力進場信號邏輯
+        # 1. 資金流向必須高於多空線 (真正的突破)
+        is_fund_above_line = fund_flow_trend > bull_bear_line
+        # 2. 多空線在超賣區域 (< 25)
+        is_oversold = bull_bear_line < 25
+        # 3. 主力進場信號 = 資金流向突破多空線且在超賣區
+        banker_entry_signal = is_fund_above_line and is_oversold
+        
+        # 根據Pine Script邏輯判斷主力狀態和對應的股價表現
+        if banker_entry_signal:
+            fund_status = '主力進場'  # 黃色蠟燭
+            entry_signal_strength = 95
+            # 主力進場通常伴隨股價上漲 (合理的邏輯關聯)
+            change_percent = random.uniform(1.0, 6.0)  # 上漲1-6%
+        elif is_fund_above_line:
+            fund_status = '主力增倉'  # 綠色蠟燭
+            entry_signal_strength = 85
+            # 主力增倉通常伴隨股價上漲或持平
+            change_percent = random.uniform(-0.5, 4.0)  # -0.5%到4%
+        elif fund_flow_trend < bull_bear_line:
+            fund_status = '主力退場'  # 紅色蠟燭
+            entry_signal_strength = 30
+            # 主力退場通常伴隨股價下跌
+            change_percent = random.uniform(-5.0, -0.5)  # 下跌0.5-5%
+        else:
+            fund_status = '主力觀望'  # 其他狀態
+            entry_signal_strength = 50
+            # 觀望狀態股價變化較小
+            change_percent = random.uniform(-2.0, 2.0)  # -2%到2%
+        
+        # 轉換為原有格式以保持兼容性
+        if fund_status == '主力進場' or fund_status == '主力增倉':
+            fund_trend = '流入'
+        elif fund_status == '主力退場':
+            fund_trend = '流出'
+        else:
+            fund_trend = '持平'
+        
+        # 多空線狀態 (基於bull_bear_line數值)
+        if bull_bear_line > 75:
+            multi_short_line = '多頭'
+        elif bull_bear_line < 25:
+            multi_short_line = '空頭'
+        else:
+            multi_short_line = '盤整'
         
         return {
             'code': stock_code,
@@ -87,9 +136,14 @@ def get_stock_web_data(stock_code, stock_name=None):
             'close_price': round(base_price, 2),
             'change_percent': round(change_percent, 2),
             'volume': random.randint(1000, 100000),
-            'fund_trend': random.choice(['流入', '流出', '持平']),
-            'multi_short_line': random.choice(['多頭', '空頭', '盤整']),
-            'entry_score': random.randint(60, 95)
+            'fund_trend': fund_trend,
+            'multi_short_line': multi_short_line,
+            'entry_score': entry_signal_strength,
+            # Pine Script 特有指標
+            'fund_flow_trend': round(fund_flow_trend, 2),
+            'bull_bear_line': round(bull_bear_line, 2),
+            'banker_entry_signal': banker_entry_signal,
+            'fund_status': fund_status
         }
     except Exception as e:
         logger.error(f"獲取股票 {stock_code} 資料失敗: {e}")
@@ -194,14 +248,35 @@ def screen_stocks():
                     stock_data['name'] = stock_name
                     stocks_data[stock_code] = stock_data
         
-        # 篩選主力進場股票
+        # 篩選主力進場股票 - 使用Pine Script邏輯
         results = []
         for code, data in stocks_data.items():
-            if data.get('entry_score', 0) >= 70:  # 評分70以上
+            # Pine Script主力進場條件檢查
+            banker_entry_signal = data.get('banker_entry_signal', False)
+            fund_flow_trend = data.get('fund_flow_trend', 0)
+            bull_bear_line = data.get('bull_bear_line', 0)
+            fund_status = data.get('fund_status', '主力觀望')
+            
+            # Pine Script的核心篩選條件
+            # 1. 主力進場信號 (黃色蠟燭) - 最優先
+            # 2. 主力增倉信號 (綠色蠟燭) - 次優先
+            is_banker_entry = banker_entry_signal  # 資金流向突破多空線且在超賣區
+            is_banker_increase = fund_flow_trend > bull_bear_line and not banker_entry_signal  # 資金流向高於多空線
+            
+            # 符合Pine Script主力進場或增倉條件
+            if is_banker_entry or is_banker_increase:
                 # 確保名稱欄位不為空
                 stock_name = data.get('name', '')
                 if not stock_name:
                     stock_name = get_stock_name_by_code(code)
+                
+                # 根據Pine Script邏輯計算優先級評分
+                if is_banker_entry:
+                    priority_score = 100  # 主力進場信號最高優先級
+                    signal_type = '主力進場'
+                else:
+                    priority_score = 85   # 主力增倉信號次優先級
+                    signal_type = '主力增倉'
                 
                 results.append({
                     'code': data.get('code', code),
@@ -210,17 +285,21 @@ def screen_stocks():
                     'change_percent': data.get('change_percent', 0),
                     'fund_trend': data.get('fund_trend', '持平'),
                     'multi_short_line': data.get('multi_short_line', '盤整'),
-                    'entry_score': data.get('entry_score', 0)
+                    'entry_score': priority_score,
+                    'signal_type': signal_type,
+                    'fund_flow_trend': fund_flow_trend,
+                    'bull_bear_line': bull_bear_line
                 })
         
-        # 按評分排序
+        # 按優先級評分排序 (主力進場信號優先)
         results.sort(key=lambda x: x.get('entry_score', 0), reverse=True)
         
         return jsonify({
             'success': True,
             'data': results,
             'count': len(results),
-            'note': f'篩選出 {len(results)} 支主力進場股票'
+            'note': f'篩選出 {len(results)} 支符合Pine Script主力進場條件的股票',
+            'criteria': 'Pine Script邏輯：資金流向突破多空線(超賣區) 或 資金流向高於多空線'
         })
         
     except Exception as e:
