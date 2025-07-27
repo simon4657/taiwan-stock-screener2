@@ -7,6 +7,10 @@ import os
 from datetime import datetime, timedelta
 import requests
 import json
+import urllib3
+
+# 禁用SSL警告
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # 設定日誌
 logging.basicConfig(level=logging.INFO)
@@ -85,7 +89,7 @@ def fetch_real_stock_data():
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
         
-        response = requests.get(url, headers=headers, timeout=30)
+        response = requests.get(url, headers=headers, timeout=30, verify=False)
         response.raise_for_status()
         
         data = response.json()
@@ -294,9 +298,17 @@ def calculate_pine_script_indicators(ohlc_data):
         
         banker_entry_signal = is_crossover and is_oversold
         
-        return current_fund, current_bull_bear, banker_entry_signal
+        # 記錄詳細計算結果用於調試
+        logger.info(f"Pine Script計算結果:")
+        logger.info(f"  資金流向趨勢: {current_fund:.2f} (前期: {previous_fund:.2f})")
+        logger.info(f"  多空線: {current_bull_bear:.2f} (前期: {previous_bull_bear:.2f})")
+        logger.info(f"  crossover: {is_crossover} ({current_fund:.2f} > {current_bull_bear:.2f} and {previous_fund:.2f} <= {previous_bull_bear:.2f})")
+        logger.info(f"  超賣區: {is_oversold} ({current_bull_bear:.2f} < 25)")
+        logger.info(f"  主力進場信號: {banker_entry_signal}")
+        
+        return current_fund, current_bull_bear, banker_entry_signal, is_crossover, is_oversold
     
-    return None, None, False
+    return None, None, False, False, False
 
 def get_stock_web_data(stock_code, stock_name=None):
     """獲取股票的完整資料（結合即時資料和技術指標）"""
@@ -327,25 +339,26 @@ def get_stock_web_data(stock_code, stock_name=None):
                 historical_data.append(today_data)
             
             # 計算Pine Script技術指標
-            fund_flow_trend, bull_bear_line, banker_entry_signal = calculate_pine_script_indicators(historical_data)
+            result = calculate_pine_script_indicators(historical_data)
+            fund_flow_trend, bull_bear_line, banker_entry_signal, is_crossover, is_oversold = result
             
             if fund_flow_trend is not None:
-                # 根據技術指標判斷狀態
+                # 根據嚴格的Pine Script條件判斷狀態
                 if banker_entry_signal:
                     signal_status = "主力進場"
                     score = 100
+                elif is_crossover and not is_oversold:
+                    signal_status = "突破但非超賣"
+                    score = 75
+                elif is_oversold and not is_crossover:
+                    signal_status = "超賣但未突破"
+                    score = 65
                 elif fund_flow_trend > bull_bear_line:
-                    signal_status = "主力增倉"
-                    score = 85
-                elif fund_flow_trend < bull_bear_line - 5:
-                    signal_status = "主力減倉"
-                    score = 40
-                elif fund_flow_trend < bull_bear_line:
-                    signal_status = "主力退場"
-                    score = 20
+                    signal_status = "資金流向強勢"
+                    score = 55
                 else:
-                    signal_status = "弱反彈"
-                    score = 60
+                    signal_status = "資金流向弱勢"
+                    score = 30
                 
                 return {
                     'name': stock_name or current_data['name'],
@@ -355,7 +368,10 @@ def get_stock_web_data(stock_code, stock_name=None):
                     'multi_short_line': f"{bull_bear_line:.2f}",
                     'signal_status': signal_status,
                     'score': score,
-                    'date': current_data['date']
+                    'date': current_data['date'],
+                    'is_crossover': is_crossover,
+                    'is_oversold': is_oversold,
+                    'banker_entry_signal': banker_entry_signal
                 }
         
         # 如果無法計算技術指標，返回基本資料
@@ -472,22 +488,50 @@ def screen_stocks():
                     **stock_data
                 })
         
-        # 篩選符合Pine Script主力進場條件的股票
+        # 篩選符合Pine Script主力進場條件的股票（嚴格條件）
         filtered_stocks = []
+        analysis_details = []
+        
         for stock in all_stocks_data:
-            if stock['signal_status'] in ['主力進場', '主力增倉']:
+            # 記錄分析詳情
+            analysis_details.append({
+                'code': stock['code'],
+                'name': stock['name'],
+                'fund_trend': stock['fund_trend'],
+                'multi_short_line': stock['multi_short_line'],
+                'is_crossover': stock.get('is_crossover', False),
+                'is_oversold': stock.get('is_oversold', False),
+                'banker_entry_signal': stock.get('banker_entry_signal', False),
+                'signal_status': stock['signal_status']
+            })
+            
+            # 嚴格的Pine Script主力進場條件：只有banker_entry_signal為True才符合
+            if stock.get('banker_entry_signal', False):
                 filtered_stocks.append(stock)
         
         # 按評分排序
         filtered_stocks.sort(key=lambda x: x['score'], reverse=True)
         
+        # 記錄篩選結果
+        logger.info(f"Pine Script篩選結果:")
+        logger.info(f"  總共分析: {len(all_stocks_data)} 支股票")
+        logger.info(f"  符合條件: {len(filtered_stocks)} 支股票")
+        
+        for detail in analysis_details:
+            logger.info(f"  {detail['code']} {detail['name']}: 資金流向={detail['fund_trend']}, 多空線={detail['multi_short_line']}, crossover={detail['is_crossover']}, 超賣={detail['is_oversold']}, 主力進場={detail['banker_entry_signal']}")
+        
         return jsonify({
             'success': True,
             'data': filtered_stocks,
             'total': len(filtered_stocks),
-            'message': f'篩選出 {len(filtered_stocks)} 支符合Pine Script主力進場條件的股票（基於真實市場資料）',
+            'message': f'嚴格Pine Script篩選：{len(filtered_stocks)} 支符合主力進場條件（需同時滿足crossover和超賣區條件）',
             'query_time': current_time.isoformat(),
-            'data_date': data_date
+            'data_date': data_date,
+            'analysis_summary': {
+                'total_analyzed': len(all_stocks_data),
+                'meets_criteria': len(filtered_stocks),
+                'criteria': 'crossover(資金流向, 多空線) AND 多空線 < 25'
+            }
         })
         
     except Exception as e:
