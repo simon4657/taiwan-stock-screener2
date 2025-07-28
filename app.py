@@ -324,16 +324,40 @@ def fetch_historical_data_for_indicators(stock_code, days=60):
     
     return None
 
-def calculate_weighted_simple_average(values, length, weight):
-    """計算加權簡單平均（模擬Pine Script函數）"""
-    if len(values) < length:
-        return values[-1] if values else 0
+def calculate_weighted_simple_average(src_values, length, weight):
+    """正確實施Pine Script的加權簡單平均函數"""
+    if not src_values or length <= 0:
+        return 0
     
-    # 簡化的加權移動平均計算
-    recent_values = values[-length:]
-    weighted_sum = sum(val * (i + 1) for i, val in enumerate(recent_values))
-    weight_sum = sum(range(1, length + 1))
-    return weighted_sum / weight_sum if weight_sum > 0 else 0
+    if len(src_values) == 1:
+        return src_values[0]
+    
+    output_values = []
+    sum_float = 0.0
+    
+    for i, src in enumerate(src_values):
+        # 更新移動總和
+        if i >= length:
+            sum_float = sum_float - src_values[i - length] + src
+        else:
+            sum_float += src
+        
+        # 計算移動平均
+        if i >= length - 1:
+            moving_average = sum_float / length
+        else:
+            moving_average = sum_float / (i + 1)
+        
+        # 計算加權輸出
+        if i == 0:
+            output = moving_average
+        else:
+            prev_output = output_values[-1]
+            output = (src * weight + prev_output * (length - weight)) / length
+        
+        output_values.append(output)
+    
+    return output_values[-1] if output_values else 0
 
 def calculate_ema(values, period):
     """計算指數移動平均"""
@@ -351,7 +375,7 @@ def calculate_ema(values, period):
 def calculate_pine_script_indicators(ohlc_data):
     """完全按照Pine Script邏輯計算技術指標"""
     if len(ohlc_data) < 34:  # 需要足夠的歷史數據
-        return None, None, False
+        return None, None, False, False, False
     
     # 提取OHLC數據
     closes = [d['close'] for d in ohlc_data]
@@ -362,37 +386,76 @@ def calculate_pine_script_indicators(ohlc_data):
     # 計算典型價格 (2 * close + high + low + open) / 5
     typical_prices = [(2 * c + h + l + o) / 5 for c, h, l, o in zip(closes, highs, lows, opens)]
     
-    # 計算27期最高最低價
-    lowest_27 = [min(lows[max(0, i-26):i+1]) for i in range(len(lows))]
-    highest_27 = [max(highs[max(0, i-26):i+1]) for i in range(len(highs))]
-    
-    # 計算34期最高最低價
-    lowest_34 = [min(lows[max(0, i-33):i+1]) for i in range(len(lows))]
-    highest_34 = [max(highs[max(0, i-33):i+1]) for i in range(len(highs))]
-    
-    # 計算資金流向趨勢（簡化版Pine Script公式）
+    # 計算資金流向趨勢（完全按照Pine Script公式）
     fund_flow_values = []
+    
     for i in range(len(closes)):
-        if highest_27[i] != lowest_27[i]:
-            relative_position = (closes[i] - lowest_27[i]) / (highest_27[i] - lowest_27[i]) * 100
-        else:
-            relative_position = 50
+        # 計算27期最高最低價
+        start_idx = max(0, i - 26)
+        lowest_27 = min(lows[start_idx:i+1])
+        highest_27 = max(highs[start_idx:i+1])
         
-        # 簡化的加權平均計算
-        if i >= 5:
-            wsa1 = calculate_weighted_simple_average([relative_position], 5, 1)
-            wsa2 = calculate_weighted_simple_average([wsa1], 3, 1)
+        if highest_27 != lowest_27:
+            # 計算相對位置
+            relative_pos = (closes[i] - lowest_27) / (highest_27 - lowest_27) * 100
+            
+            # 收集足夠的相對位置數據用於加權平均
+            relative_positions = []
+            for j in range(max(0, i - 4), i + 1):
+                start_j = max(0, j - 26)
+                low_27_j = min(lows[start_j:j+1])
+                high_27_j = max(highs[start_j:j+1])
+                if high_27_j != low_27_j:
+                    rel_pos_j = (closes[j] - low_27_j) / (high_27_j - low_27_j) * 100
+                else:
+                    rel_pos_j = 50
+                relative_positions.append(rel_pos_j)
+            
+            # 第一層加權簡單平均（5期，權重1）
+            wsa1 = calculate_weighted_simple_average(relative_positions, min(5, len(relative_positions)), 1)
+            
+            # 第二層加權簡單平均（3期，權重1）
+            if i >= 2:
+                # 收集前面的wsa1值
+                wsa1_values = []
+                for k in range(max(0, i - 2), i + 1):
+                    # 重新計算每個時點的wsa1
+                    rel_pos_k = []
+                    for j in range(max(0, k - 4), k + 1):
+                        start_j = max(0, j - 26)
+                        low_27_j = min(lows[start_j:j+1])
+                        high_27_j = max(highs[start_j:j+1])
+                        if high_27_j != low_27_j:
+                            rel_pos_j = (closes[j] - low_27_j) / (high_27_j - low_27_j) * 100
+                        else:
+                            rel_pos_j = 50
+                        rel_pos_k.append(rel_pos_j)
+                    
+                    wsa1_k = calculate_weighted_simple_average(rel_pos_k, min(5, len(rel_pos_k)), 1)
+                    wsa1_values.append(wsa1_k)
+                
+                wsa2 = calculate_weighted_simple_average(wsa1_values, min(3, len(wsa1_values)), 1)
+            else:
+                wsa2 = wsa1
+            
+            # 最終公式：(3 * wsa1 - 2 * wsa2 - 50) * 1.032 + 50
             fund_flow = (3 * wsa1 - 2 * wsa2 - 50) * 1.032 + 50
         else:
-            fund_flow = relative_position
+            fund_flow = 50
         
-        fund_flow_values.append(max(0, min(100, fund_flow)))  # 限制在0-100範圍
+        fund_flow_values.append(max(0, min(100, fund_flow)))
     
     # 計算多空線（13期EMA）
+    # 先計算標準化的典型價格
     bull_bear_values = []
     for i in range(len(typical_prices)):
-        if highest_34[i] != lowest_34[i]:
-            normalized_price = (typical_prices[i] - lowest_34[i]) / (highest_34[i] - lowest_34[i]) * 100
+        # 計算34期最高最低價
+        start_idx = max(0, i - 33)
+        lowest_34 = min(lows[start_idx:i+1])
+        highest_34 = max(highs[start_idx:i+1])
+        
+        if highest_34 != lowest_34:
+            normalized_price = (typical_prices[i] - lowest_34) / (highest_34 - lowest_34) * 100
         else:
             normalized_price = 50
         bull_bear_values.append(max(0, min(100, normalized_price)))
@@ -406,32 +469,45 @@ def calculate_pine_script_indicators(ohlc_data):
             ema_value = calculate_ema(bull_bear_values[:i+1], 13)
         bull_bear_line_values.append(ema_value)
     
-    # 檢查crossover條件
+    # 檢查當日和前一日的黃柱信號
+    current_day_signal = False
+    previous_day_signal = False
+    
     if len(fund_flow_values) >= 2 and len(bull_bear_line_values) >= 2:
+        # 檢查當日黃柱
         current_fund = fund_flow_values[-1]
         previous_fund = fund_flow_values[-2]
         current_bull_bear = bull_bear_line_values[-1]
         previous_bull_bear = bull_bear_line_values[-2]
         
         # Pine Script crossover邏輯：ta.crossover(fund_flow_trend, bull_bear_line)
-        is_crossover = (current_fund > current_bull_bear) and (previous_fund <= previous_bull_bear)
-        is_oversold = current_bull_bear < 25
+        is_crossover_today = (current_fund > current_bull_bear) and (previous_fund <= previous_bull_bear)
+        is_oversold_today = current_bull_bear < 25
+        current_day_signal = is_crossover_today and is_oversold_today
         
-        banker_entry_signal = is_crossover and is_oversold
+        # 檢查前一日黃柱
+        if len(fund_flow_values) >= 3 and len(bull_bear_line_values) >= 3:
+            prev_fund = fund_flow_values[-2]
+            prev_prev_fund = fund_flow_values[-3]
+            prev_bull_bear = bull_bear_line_values[-2]
+            prev_prev_bull_bear = bull_bear_line_values[-3]
+            
+            is_crossover_yesterday = (prev_fund > prev_bull_bear) and (prev_prev_fund <= prev_prev_bull_bear)
+            is_oversold_yesterday = prev_bull_bear < 25
+            previous_day_signal = is_crossover_yesterday and is_oversold_yesterday
+        
+        # 黃柱信號：當日或前一日出現
+        banker_entry_signal = current_day_signal or previous_day_signal
         
         # 記錄詳細計算結果用於調試（僅記錄符合條件的股票）
         if banker_entry_signal:
-            logger.info(f"發現符合條件股票 - {stock_code if 'stock_code' in locals() else 'Unknown'}:")
-            logger.info(f"  資金流向趨勢: {current_fund:.2f} (前期: {previous_fund:.2f})")
-            logger.info(f"  多空線: {current_bull_bear:.2f} (前期: {previous_bull_bear:.2f})")
-            logger.info(f"  crossover: {is_crossover}")
-            logger.info(f"  超賣區: {is_oversold}")
-            logger.info(f"  主力進場信號: {banker_entry_signal}")
+            logger.info(f"🟡 發現黃柱信號:")
+            logger.info(f"  當日: 資金流向={current_fund:.2f}, 多空線={current_bull_bear:.2f}, crossover={is_crossover_today}, 超賣={is_oversold_today}, 黃柱={current_day_signal}")
+            if len(fund_flow_values) >= 3:
+                logger.info(f"  前日: 資金流向={prev_fund:.2f}, 多空線={prev_bull_bear:.2f}, crossover={is_crossover_yesterday}, 超賣={is_oversold_yesterday}, 黃柱={previous_day_signal}")
         
-        return current_fund, current_bull_bear, banker_entry_signal, is_crossover, is_oversold
+        return current_fund, current_bull_bear, banker_entry_signal, (is_crossover_today if current_day_signal else is_crossover_yesterday), (is_oversold_today if current_day_signal else is_oversold_yesterday)
     
-    return None, None, False, False, False
-
 def get_stock_web_data(stock_code, stock_name=None):
     """獲取股票的完整資料（結合即時資料和技術指標）"""
     try:
@@ -467,7 +543,7 @@ def get_stock_web_data(stock_code, stock_name=None):
             if fund_flow_trend is not None:
                 # 根據嚴格的Pine Script條件判斷狀態
                 if banker_entry_signal:
-                    signal_status = "主力進場"
+                    signal_status = "🟡 黃柱信號"
                     score = 100
                 elif is_crossover and not is_oversold:
                     signal_status = "突破但非超賣"
@@ -693,25 +769,26 @@ def screen_stocks():
         filtered_stocks.sort(key=lambda x: x['score'], reverse=True)
         
         # 記錄篩選結果
-        logger.info(f"Pine Script篩選結果:")
+        logger.info(f"黃柱篩選結果:")
         logger.info(f"  總共分析: {len(all_stocks_data)} 支股票")
         logger.info(f"  符合條件: {len(filtered_stocks)} 支股票")
         
         for detail in analysis_details:
-            logger.info(f"  {detail['code']} {detail['name']}: 資金流向={detail['fund_trend']}, 多空線={detail['multi_short_line']}, crossover={detail['is_crossover']}, 超賣={detail['is_oversold']}, 主力進場={detail['banker_entry_signal']}")
+            if detail['banker_entry_signal']:
+                logger.info(f"  🟡 {detail['code']} {detail['name']}: 資金流向={detail['fund_trend']}, 多空線={detail['multi_short_line']}, crossover={detail['is_crossover']}, 超賣={detail['is_oversold']}, 黃柱={detail['banker_entry_signal']}")
         
         return jsonify({
             'success': True,
             'data': filtered_stocks,
             'total': len(filtered_stocks),
-            'message': f'全市場Pine Script篩選：{len(filtered_stocks)} 支符合主力進場條件（分析 {processed_count} 支股票）',
+            'message': f'全市場黃柱篩選：{len(filtered_stocks)} 支出現黃柱信號（分析 {processed_count} 支股票）',
             'query_time': current_time.isoformat(),
             'data_date': data_date,
             'analysis_summary': {
                 'total_analyzed': processed_count,
                 'total_available': total_stocks,
                 'meets_criteria': len(filtered_stocks),
-                'criteria': 'crossover(資金流向, 多空線) AND 多空線 < 25',
+                'criteria': '黃柱信號：crossover(資金流向, 多空線) AND 多空線 < 25 (當日或前一日)',
                 'market_coverage': f'{(processed_count/total_stocks*100):.1f}%' if total_stocks > 0 else '0%'
             }
         })
