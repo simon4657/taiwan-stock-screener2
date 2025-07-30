@@ -103,12 +103,13 @@ def fetch_real_stock_data():
             stock_code = item.get('Code', '').strip()
             stock_name = item.get('Name', '').strip()
             
-            # 過濾條件：只處理有效的股票代碼
+            # 過濾條件：只處理上市股票（代碼1000-9999）
             if (stock_code and 
                 len(stock_code) == 4 and 
                 stock_code.isdigit() and
+                1000 <= int(stock_code) <= 9999 and  # 限制為上市股票代碼範圍
                 stock_name and
-                not any(keyword in stock_name for keyword in ['DR', 'TDR', 'ETF', 'ETN', '權證', '特別股'])):
+                not any(keyword in stock_name for keyword in ['DR', 'TDR', 'ETF', 'ETN', '權證', '特別股', '存託憑證'])):
                 
                 try:
                     # 解析數值，處理可能的逗號分隔符
@@ -640,7 +641,15 @@ def index():
 def get_stocks():
     """獲取股票清單"""
     try:
-        stock_list = get_default_stock_list()
+        # 如果有更新的股票資料，使用實際資料；否則使用預設清單
+        if stocks_data:
+            stock_list = [
+                {'stock_id': code, 'stock_name': data['name']} 
+                for code, data in stocks_data.items()
+            ]
+        else:
+            stock_list = get_default_stock_list()
+            
         return jsonify({
             'success': True,
             'data': stock_list,
@@ -714,9 +723,15 @@ def screen_stocks():
         
         logger.info(f"開始分析 {total_stocks} 支股票的Pine Script指標...")
         
-        # 分批處理以避免超時
-        batch_size = 50  # 每批處理50支股票
+        # 分批處理以避免超時（減少批次大小）
+        batch_size = 10  # 從50減少到10支股票每批
         stock_codes = list(stocks_data.keys())
+        
+        # 限制總處理數量以避免超時
+        max_stocks = min(800, len(stock_codes))  # 最多處理800支股票
+        stock_codes = stock_codes[:max_stocks]
+        
+        logger.info(f"為確保穩定性，本次處理前 {max_stocks} 支上市股票")
         
         for i in range(0, len(stock_codes), batch_size):
             batch_codes = stock_codes[i:i+batch_size]
@@ -724,8 +739,19 @@ def screen_stocks():
             
             for stock_code in batch_codes:
                 try:
+                    # 增加單支股票處理超時保護
+                    import signal
+                    
+                    def timeout_handler(signum, frame):
+                        raise TimeoutError("單支股票處理超時")
+                    
+                    signal.signal(signal.SIGALRM, timeout_handler)
+                    signal.alarm(10)  # 單支股票最多10秒
+                    
                     stock_name = stocks_data[stock_code]['name']
                     stock_data = get_stock_web_data(stock_code, stock_name)
+                    
+                    signal.alarm(0)  # 取消超時
                     
                     if stock_data:
                         all_stocks_data.append({
@@ -734,13 +760,18 @@ def screen_stocks():
                         })
                         processed_count += 1
                         
-                        # 每處理10支股票記錄一次進度
-                        if processed_count % 10 == 0:
-                            logger.info(f"已處理 {processed_count}/{total_stocks} 支股票...")
+                        # 每處理5支股票記錄一次進度
+                        if processed_count % 5 == 0:
+                            logger.info(f"已處理 {processed_count}/{max_stocks} 支股票...")
                             
+                except TimeoutError:
+                    logger.warning(f"股票 {stock_code} 處理超時，跳過")
+                    continue
                 except Exception as e:
                     logger.warning(f"處理股票 {stock_code} 時發生錯誤: {e}")
                     continue
+                finally:
+                    signal.alarm(0)  # 確保取消超時
         
         logger.info(f"完成股票分析，共處理 {processed_count} 支股票")
         
@@ -781,7 +812,7 @@ def screen_stocks():
             'success': True,
             'data': filtered_stocks,
             'total': len(filtered_stocks),
-            'message': f'全市場黃柱篩選：{len(filtered_stocks)} 支出現黃柱信號（分析 {processed_count} 支股票）',
+            'message': f'黃柱篩選完成：{len(filtered_stocks)} 支出現黃柱信號（已處理 {processed_count}/{max_stocks} 支股票）',
             'query_time': current_time.isoformat(),
             'data_date': data_date,
             'analysis_summary': {

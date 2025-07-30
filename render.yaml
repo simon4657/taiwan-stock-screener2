@@ -1,9 +1,8 @@
 services:
   - type: web
-    name: taiwan-stock-screener
+    name: taiwan-stock-timeout-fixed
     env: python
     buildCommand: pip install --no-cache-dir -r requirements.txt
-    startCommand: gunicorn app:app
-    plan: free
+    startCommand: gunicorn -c gunicorn.conf.py app:app
     healthCheckPath: /api/health
 
