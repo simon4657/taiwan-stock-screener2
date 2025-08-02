@@ -265,6 +265,77 @@
             font-family: monospace;
         }
         
+        /* 趨勢箭頭樣式 */
+        .trend-up {
+            color: #dc3545;
+            font-weight: bold;
+            margin-left: 4px;
+        }
+        
+        .trend-down {
+            color: #28a745;
+            font-weight: bold;
+            margin-left: 4px;
+        }
+        
+        .trend-flat {
+            color: #6c757d;
+            margin-left: 4px;
+        }
+        
+        /* 成交量樣式 */
+        .volume-display {
+            font-family: monospace;
+            font-weight: 600;
+        }
+        
+        .volume-high {
+            color: #dc3545;
+        }
+        
+        .volume-normal {
+            color: #212529;
+        }
+        
+        .volume-low {
+            color: #6c757d;
+        }
+        
+        /* 量比樣式 */
+        .volume-ratio {
+            font-family: monospace;
+            font-weight: 600;
+            font-size: 13px;
+        }
+        
+        .volume-ratio-extreme {
+            color: #dc3545;
+            font-weight: bold;
+            background: #fff5f5;
+            padding: 2px 6px;
+            border-radius: 4px;
+            border: 1px solid #ffeaa7;
+        }
+        
+        .volume-ratio-high {
+            color: #fd7e14;
+            font-weight: bold;
+        }
+        
+        .volume-ratio-normal {
+            color: #212529;
+        }
+        
+        .volume-ratio-low {
+            color: #6c757d;
+        }
+        
+        /* 指標值樣式 */
+        .indicator-value {
+            font-family: monospace;
+            font-weight: 600;
+        }
+        
         .loading {
             text-align: center;
             padding: 40px;
@@ -321,6 +392,24 @@
             .stock-table th,
             .stock-table td {
                 padding: 8px 6px;
+            }
+            
+            /* 手機版隱藏部分欄位 */
+            .stock-table th:nth-child(5),
+            .stock-table td:nth-child(5),
+            .stock-table th:nth-child(6),
+            .stock-table td:nth-child(6),
+            .stock-table th:nth-child(11),
+            .stock-table td:nth-child(11) {
+                display: none;
+            }
+        }
+        
+        @media (max-width: 1024px) and (min-width: 769px) {
+            /* 平板版隱藏量比欄位 */
+            .stock-table th:nth-child(6),
+            .stock-table td:nth-child(6) {
+                display: none;
             }
         }
     </style>
@@ -527,6 +616,8 @@
                             <th>股票名稱</th>
                             <th>股價</th>
                             <th>漲跌幅</th>
+                            <th>成交量</th>
+                            <th>量比</th>
                             <th>資金流向</th>
                             <th>多空線</th>
                             <th>訊號狀態</th>
@@ -552,11 +643,11 @@
                     case '主力減倉':
                         signalClass = 'signal-decrease';
                         break;
-                    case '主力退場':
+                    case '主力出場':
                         signalClass = 'signal-exit';
                         break;
                     default:
-                        signalClass = 'signal-exit';
+                        signalClass = '';
                 }
                 
                 let scoreClass = '';
@@ -568,14 +659,40 @@
                     scoreClass = 'score-low';
                 }
                 
+                // 處理趨勢箭頭
+                function getTrendArrow(direction) {
+                    switch(direction) {
+                        case 'up': return '<span class="trend-up">↑</span>';
+                        case 'down': return '<span class="trend-down">↓</span>';
+                        default: return '<span class="trend-flat">→</span>';
+                    }
+                }
+                
+                // 處理成交量顯示
+                const volumeClass = stock.volume_trend === 'up' ? 'volume-high' : 
+                                  stock.volume_trend === 'down' ? 'volume-low' : 'volume-normal';
+                const volumeDisplay = `<span class="volume-display ${volumeClass}">${stock.volume_formatted}${getTrendArrow(stock.volume_trend)}</span>`;
+                
+                // 處理量比顯示
+                const volumeRatioClass = stock.volume_ratio_class || 'volume-ratio-normal';
+                const volumeRatioDisplay = `<span class="volume-ratio ${volumeRatioClass}">${stock.volume_ratio.toFixed(2)}倍${getTrendArrow(stock.volume_trend)}</span>`;
+                
+                // 處理資金流向顯示
+                const fundTrendDisplay = `<span class="indicator-value">${stock.fund_trend}${getTrendArrow(stock.fund_trend_direction)}</span>`;
+                
+                // 處理多空線顯示
+                const multiShortLineDisplay = `<span class="indicator-value">${stock.multi_short_line}${getTrendArrow(stock.multi_short_line_direction)}</span>`;
+                
                 tableHTML += `
                     <tr>
                         <td class="stock-code">${stock.code}</td>
                         <td class="stock-name">${stock.name}</td>
                         <td class="price">$${stock.price.toFixed(2)}</td>
                         <td class="${changeClass}">${changeSymbol}${stock.change_percent.toFixed(2)}%</td>
-                        <td>${stock.fund_trend}</td>
-                        <td>${stock.multi_short_line}</td>
+                        <td>${volumeDisplay}</td>
+                        <td>${volumeRatioDisplay}</td>
+                        <td>${fundTrendDisplay}</td>
+                        <td>${multiShortLineDisplay}</td>
                         <td><span class="signal-status ${signalClass}">${stock.signal_status}</span></td>
                         <td class="score ${scoreClass}">${stock.score}</td>
                         <td class="date-info">${stock.date}</td>

@@ -25,6 +25,58 @@ is_updating = False
 last_update_time = None
 data_date = None  # 資料日期
 
+def format_volume(volume):
+    """格式化成交量顯示"""
+    if volume >= 100000000:  # 1億以上
+        return f"{volume / 100000000:.2f}億"
+    elif volume >= 10000:  # 1萬以上
+        return f"{volume / 10000:.2f}萬"
+    else:
+        return f"{volume:,}"
+
+def calculate_trend_direction(current_value, previous_value, threshold=0.05):
+    """計算趨勢方向"""
+    if previous_value == 0:
+        return "flat", 0
+    
+    change_percent = (current_value - previous_value) / previous_value
+    
+    if change_percent > threshold:
+        return "up", change_percent * 100
+    elif change_percent < -threshold:
+        return "down", change_percent * 100
+    else:
+        return "flat", change_percent * 100
+
+def calculate_volume_ratio(current_volume, historical_volumes):
+    """計算量比（當日成交量/近5日平均成交量）"""
+    if not historical_volumes or len(historical_volumes) == 0:
+        return 1.0
+    
+    # 取最近5日的成交量（排除當日）
+    recent_volumes = [v for v in historical_volumes[-5:] if v > 0]
+    
+    if len(recent_volumes) == 0:
+        return 1.0
+    
+    avg_volume = sum(recent_volumes) / len(recent_volumes)
+    
+    if avg_volume == 0:
+        return 1.0
+    
+    return current_volume / avg_volume
+
+def get_volume_ratio_class(ratio):
+    """根據量比獲取CSS類別"""
+    if ratio >= 2.0:
+        return "volume-ratio-extreme"
+    elif ratio >= 1.5:
+        return "volume-high"
+    elif ratio <= 0.8:
+        return "volume-low"
+    else:
+        return "volume-normal"
+
 def get_default_stock_list():
     """獲取預設股票清單"""
     return [
@@ -507,7 +559,15 @@ def calculate_pine_script_indicators(ohlc_data):
             if len(fund_flow_values) >= 3:
                 logger.info(f"  前日: 資金流向={prev_fund:.2f}, 多空線={prev_bull_bear:.2f}, crossover={is_crossover_yesterday}, 超賣={is_oversold_yesterday}, 黃柱={previous_day_signal}")
         
-        return current_fund, current_bull_bear, banker_entry_signal, (is_crossover_today if current_day_signal else is_crossover_yesterday), (is_oversold_today if current_day_signal else is_oversold_yesterday)
+        return {
+            'fund_trend': current_fund,
+            'multi_short_line': current_bull_bear,
+            'banker_entry_signal': banker_entry_signal,
+            'is_crossover': (is_crossover_today if current_day_signal else is_crossover_yesterday),
+            'is_oversold': (is_oversold_today if current_day_signal else is_oversold_yesterday),
+            'fund_trend_previous': previous_fund if len(fund_flow_values) >= 2 else current_fund,
+            'multi_short_line_previous': previous_bull_bear if len(bull_bear_line_values) >= 2 else current_bull_bear
+        }
     
 def get_stock_web_data(stock_code, stock_name=None):
     """獲取股票的完整資料（結合即時資料和技術指標）"""
@@ -539,7 +599,15 @@ def get_stock_web_data(stock_code, stock_name=None):
             
             # 計算Pine Script技術指標
             result = calculate_pine_script_indicators(historical_data)
-            fund_flow_trend, bull_bear_line, banker_entry_signal, is_crossover, is_oversold = result
+            
+            if result:
+                fund_flow_trend = result['fund_trend']
+                bull_bear_line = result['multi_short_line']
+                banker_entry_signal = result['banker_entry_signal']
+                is_crossover = result['is_crossover']
+                is_oversold = result['is_oversold']
+                fund_trend_previous = result['fund_trend_previous']
+                multi_short_line_previous = result['multi_short_line_previous']
             
             if fund_flow_trend is not None:
                 # 根據嚴格的Pine Script條件判斷狀態
@@ -559,12 +627,39 @@ def get_stock_web_data(stock_code, stock_name=None):
                     signal_status = "資金流向弱勢"
                     score = 30
                 
+                # 計算成交量和趨勢信息
+                current_volume = current_data['volume']
+                volume_formatted = format_volume(current_volume)
+                
+                # 計算成交量趨勢（需要歷史成交量數據）
+                historical_volumes = [d.get('volume', 0) for d in historical_data[-6:-1]] if len(historical_data) > 5 else []
+                previous_volume = historical_volumes[-1] if historical_volumes else current_volume
+                volume_trend, volume_change_percent = calculate_trend_direction(current_volume, previous_volume)
+                
+                # 計算量比
+                volume_ratio = calculate_volume_ratio(current_volume, historical_volumes)
+                volume_ratio_class = get_volume_ratio_class(volume_ratio)
+                
+                # 計算資金流向和多空線趨勢
+                fund_trend_direction, fund_trend_change = calculate_trend_direction(fund_flow_trend, fund_trend_previous)
+                multi_short_line_direction, multi_short_line_change = calculate_trend_direction(bull_bear_line, multi_short_line_previous)
+                
                 return {
                     'name': stock_name or current_data['name'],
                     'price': current_data['close'],
                     'change_percent': current_data['change_percent'],
+                    'volume': current_volume,
+                    'volume_formatted': volume_formatted,
+                    'volume_trend': volume_trend,
+                    'volume_change_percent': volume_change_percent,
+                    'volume_ratio': volume_ratio,
+                    'volume_ratio_class': volume_ratio_class,
                     'fund_trend': f"{fund_flow_trend:.2f}",
+                    'fund_trend_direction': fund_trend_direction,
+                    'fund_trend_change': fund_trend_change,
                     'multi_short_line': f"{bull_bear_line:.2f}",
+                    'multi_short_line_direction': multi_short_line_direction,
+                    'multi_short_line_change': multi_short_line_change,
                     'signal_status': signal_status,
                     'score': score,
                     'date': current_data['date'],
@@ -581,12 +676,27 @@ def get_stock_web_data(stock_code, stock_name=None):
             error_msg = f"資料不足({len(historical_data)}/34天)"
         
         logger.warning(f"股票 {stock_code} 無法計算技術指標: {error_msg}")
+        
+        # 即使無法計算技術指標，也要返回基本的成交量信息
+        current_volume = current_data['volume']
+        volume_formatted = format_volume(current_volume)
+        
         return {
             'name': stock_name or current_data['name'],
             'price': current_data['close'],
             'change_percent': current_data['change_percent'],
+            'volume': current_volume,
+            'volume_formatted': volume_formatted,
+            'volume_trend': 'flat',
+            'volume_change_percent': 0,
+            'volume_ratio': 1.0,
+            'volume_ratio_class': 'volume-normal',
             'fund_trend': error_msg,
+            'fund_trend_direction': 'flat',
+            'fund_trend_change': 0,
             'multi_short_line': error_msg,
+            'multi_short_line_direction': 'flat',
+            'multi_short_line_change': 0,
             'signal_status': error_msg,
             'score': 0,
             'date': current_data['date'],
@@ -728,7 +838,7 @@ def screen_stocks():
         stock_codes = list(stocks_data.keys())
         
         # 限制總處理數量以避免超時
-        max_stocks = min(800, len(stock_codes))  # 最多處理800支股票
+        max_stocks = min(1044, len(stock_codes))  # 最多處理1044支股票
         stock_codes = stock_codes[:max_stocks]
         
         logger.info(f"為確保穩定性，本次處理前 {max_stocks} 支上市股票")
@@ -739,20 +849,16 @@ def screen_stocks():
             
             for stock_code in batch_codes:
                 try:
-                    # 增加單支股票處理超時保護
-                    import signal
+                    # 使用簡單的超時機制，不依賴signal
+                    import time
+                    start_time = time.time()
                     
-                    def timeout_handler(signum, frame):
-                        raise TimeoutError("單支股票處理超時")
+                    stock_data = get_stock_web_data(stock_code)
                     
-                    signal.signal(signal.SIGALRM, timeout_handler)
-                    signal.alarm(10)  # 單支股票最多10秒
-                    
-                    stock_name = stocks_data[stock_code]['name']
-                    stock_data = get_stock_web_data(stock_code, stock_name)
-                    
-                    signal.alarm(0)  # 取消超時
-                    
+                    # 檢查是否超時
+                    if time.time() - start_time > 10:  # 10秒超時
+                        logger.warning(f"股票 {stock_code} 處理超時，跳過")
+                        continue                
                     if stock_data:
                         all_stocks_data.append({
                             'code': stock_code,
@@ -764,14 +870,9 @@ def screen_stocks():
                         if processed_count % 5 == 0:
                             logger.info(f"已處理 {processed_count}/{max_stocks} 支股票...")
                             
-                except TimeoutError:
-                    logger.warning(f"股票 {stock_code} 處理超時，跳過")
-                    continue
                 except Exception as e:
                     logger.warning(f"處理股票 {stock_code} 時發生錯誤: {e}")
                     continue
-                finally:
-                    signal.alarm(0)  # 確保取消超時
         
         logger.info(f"完成股票分析，共處理 {processed_count} 支股票")
         
