@@ -26,13 +26,16 @@ last_update_time = None
 data_date = None  # 資料日期
 
 def format_volume(volume):
-    """格式化成交量顯示"""
-    if volume >= 100000000:  # 1億以上
-        return f"{volume / 100000000:.2f}億"
-    elif volume >= 10000:  # 1萬以上
-        return f"{volume / 10000:.2f}萬"
+    """格式化成交張數顯示（1張=1000股）"""
+    # 將成交量（股）轉換為成交張數（張）
+    volume_lots = volume / 1000
+    
+    if volume_lots >= 100000:  # 10萬張以上
+        return f"{volume_lots / 10000:.1f}萬張"
+    elif volume_lots >= 1000:  # 1千張以上
+        return f"{volume_lots / 1000:.1f}千張"
     else:
-        return f"{volume:,}"
+        return f"{volume_lots:,.0f}張"
 
 def calculate_trend_direction(current_value, previous_value, threshold=0.05):
     """計算趨勢方向"""

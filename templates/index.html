@@ -283,7 +283,7 @@
             margin-left: 4px;
         }
         
-        /* 成交量樣式 */
+        /* 成交張數樣式 */
         .volume-display {
             font-family: monospace;
             font-weight: 600;
@@ -616,7 +616,7 @@
                             <th>股票名稱</th>
                             <th>股價</th>
                             <th>漲跌幅</th>
-                            <th>成交量</th>
+                            <th>成交張數</th>
                             <th>量比</th>
                             <th>資金流向</th>
                             <th>多空線</th>
@@ -668,7 +668,7 @@
                     }
                 }
                 
-                // 處理成交量顯示
+                // 處理成交張數顯示
                 const volumeClass = stock.volume_trend === 'up' ? 'volume-high' : 
                                   stock.volume_trend === 'down' ? 'volume-low' : 'volume-normal';
                 const volumeDisplay = `<span class="volume-display ${volumeClass}">${stock.volume_formatted}${getTrendArrow(stock.volume_trend)}</span>`;
