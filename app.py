@@ -4,10 +4,27 @@ import logging
 import threading
 import time
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import requests
 import json
 import urllib3
+
+# 台灣時區設定 (UTC+8)
+TAIWAN_TZ = timezone(timedelta(hours=8))
+
+def get_taiwan_time():
+    """獲取台灣當前時間"""
+    return datetime.now(TAIWAN_TZ)
+
+def format_taiwan_time(dt=None):
+    """格式化台灣時間為字符串"""
+    if dt is None:
+        dt = get_taiwan_time()
+    return dt.strftime('%Y-%m-%d %H:%M:%S')
+
+def get_taiwan_date():
+    """獲取台灣當前日期"""
+    return get_taiwan_time().strftime('%Y-%m-%d')
 
 # 禁用SSL警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -118,8 +135,8 @@ def get_stock_name_by_code(stock_code):
     return f"股票{stock_code}"
 
 def get_latest_trading_date():
-    """獲取最近的交易日期（排除週末）"""
-    today = datetime.now()
+    """獲取最近的交易日期（排除週末，基於台灣時間）"""
+    today = get_taiwan_time()
     
     # 如果是週六(5)或週日(6)，回推到週五
     if today.weekday() == 5:  # 週六
@@ -344,7 +361,7 @@ def fetch_historical_data_for_indicators(stock_code, days=60):
         
         # 生成60天的模擬OHLC資料
         ohlc_data = []
-        current_date = datetime.now()
+        current_date = get_taiwan_time()
         
         for i in range(60):
             date = current_date - timedelta(days=59-i)
@@ -729,7 +746,7 @@ def update_stocks_data():
         
         if real_data:
             stocks_data = real_data
-            last_update_time = datetime.now()
+            last_update_time = get_taiwan_time()
             
             # 設定資料日期（使用第一支股票的日期）
             if stocks_data:
@@ -789,7 +806,7 @@ def update_stocks():
         
         if real_data:
             stocks_data = real_data
-            last_update_time = datetime.now()
+            last_update_time = get_taiwan_time()
             data_date = get_latest_trading_date()
             
             logger.info(f"股票資料更新完成，共 {len(stocks_data)} 支股票")
@@ -820,7 +837,7 @@ def update_stocks():
 def screen_stocks():
     """篩選股票"""
     try:
-        current_time = datetime.now()
+        current_time = get_taiwan_time()
         
         # 檢查是否有股票資料
         if not stocks_data:
@@ -937,7 +954,7 @@ def health_check():
     """健康檢查"""
     return jsonify({
         'status': 'healthy',
-        'timestamp': datetime.now().isoformat(),
+        'timestamp': get_taiwan_time().isoformat(),
         'stocks_count': len(stocks_data),
         'last_update': last_update_time.isoformat() if last_update_time else None,
         'data_date': data_date,

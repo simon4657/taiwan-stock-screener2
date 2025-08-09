@@ -484,7 +484,15 @@
             
             if (lastUpdate) {
                 const updateTime = new Date(lastUpdate);
-                lastUpdateElement.textContent = updateTime.toLocaleString('zh-TW');
+                lastUpdateElement.textContent = updateTime.toLocaleString('zh-TW', {
+                    timeZone: 'Asia/Taipei',
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit'
+                }) + ' (台灣時間)';
             } else {
                 lastUpdateElement.textContent = '尚未更新';
             }
@@ -596,7 +604,7 @@
                             <li>多空線處於超賣區（< 25）</li>
                         </ul>
                         <p style="margin-top: 15px; font-size: 0.9em; color: #6c757d;">
-                            查詢時間: ${new Date(queryTime).toLocaleString('zh-TW')}<br>
+                            查詢時間: ${new Date(queryTime).toLocaleString('zh-TW', {timeZone: 'Asia/Taipei'})} (台灣時間)<br>
                             資料日期: ${dataDate}
                         </p>
                     </div>
@@ -607,7 +615,7 @@
             let tableHTML = `
                 <h2>篩選結果 (${stocks.length} 支股票)</h2>
                 <p style="margin-bottom: 20px; color: #6c757d;">
-                    查詢時間: ${new Date(queryTime).toLocaleString('zh-TW')} | 資料日期: ${dataDate}
+                    查詢時間: ${new Date(queryTime).toLocaleString('zh-TW', {timeZone: 'Asia/Taipei'})} (台灣時間) | 資料日期: ${dataDate}
                 </p>
                 <table class="stock-table">
                     <thead>
