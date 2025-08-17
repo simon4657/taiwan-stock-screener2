@@ -398,46 +398,39 @@ def fetch_historical_data_for_indicators(stock_code, days=60):
     return None
 
 def calculate_weighted_simple_average(src_values, length, weight):
-    """完全按照Pine Script邏輯實現的加權移動平均"""
+    """正確實施Pine Script的加權簡單平均函數"""
     if not src_values or length <= 0:
         return 0
     
     if len(src_values) == 1:
         return src_values[0]
     
-    # Pine Script狀態變量
+    output_values = []
     sum_float = 0.0
-    output = None
     
-    # 逐步計算，維護Pine Script的狀態邏輯
     for i, src in enumerate(src_values):
-        # Pine Script邏輯：sum_float := nz(sum_float[1]) - nz(src[length]) + src
+        # 更新移動總和
         if i >= length:
-            # 移除length期前的值，加入當前值
             sum_float = sum_float - src_values[i - length] + src
         else:
-            # 累加當前值
             sum_float += src
         
         # 計算移動平均
         if i >= length - 1:
             moving_average = sum_float / length
         else:
-            moving_average = None  # Pine Script中會是na
+            moving_average = sum_float / (i + 1)
         
-        # Pine Script邏輯：output := na(output[1]) ? moving_average : (src * weight + output[1] * (length - weight)) / length
-        if output is None:
-            # 第一次計算或moving_average為None時
-            output = moving_average if moving_average is not None else src
+        # 計算加權輸出
+        if i == 0:
+            output = moving_average
         else:
-            if moving_average is not None:
-                # 標準的加權計算
-                output = (src * weight + output * (length - weight)) / length
-            else:
-                # 如果moving_average為None，保持原值
-                output = (src * weight + output * (length - weight)) / length
+            prev_output = output_values[-1]
+            output = (src * weight + prev_output * (length - weight)) / length
+        
+        output_values.append(output)
     
-    return output if output is not None else (src_values[-1] if src_values else 0)
+    return output_values[-1] if output_values else 0
 
 def calculate_ema(values, period):
     """計算指數移動平均"""
