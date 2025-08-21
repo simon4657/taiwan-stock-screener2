@@ -574,8 +574,8 @@
                 const data = await response.json();
                 
                 if (data.success) {
-                    showStatus(data.message, 'success');
-                    displayResults(data.data, data.query_time, data.data_date);
+                    showStatus(`篩選完成：共分析 ${data.total_analyzed} 支股票，發現 ${data.yellow_candle_count} 支黃柱信號股票`, 'success');
+                    displayResults(data.yellow_candle_stocks, data.query_time, data.data_date);
                 } else {
                     showStatus('篩選失敗: ' + data.error, 'error');
                     document.getElementById('resultsContent').innerHTML = '<div class="no-results">篩選失敗，請重試</div>';
