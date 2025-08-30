@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 """
-台股主力資金進入篩選器 - 上櫃市場版本
-使用Pine Script技術分析邏輯，專門針對台灣上櫃市場股票進行主力資金進場信號篩選
+台股主力資金進入篩選器 - 上市市場版本
+
+使用Pine Script技術分析邏輯，專門針對台灣上市市場股票進行主力資金進場信號篩選
 """
 
 from flask import Flask, render_template, jsonify, request
@@ -198,7 +198,7 @@ def process_otc_stock_data(raw_data):
         return {}, None
 
 def is_valid_otc_stock(stock_code, stock_name):
-    """判斷是否為有效的上櫃一般股票"""
+    """判斷是否為有效的上市一般股票"""
     if not stock_code or not stock_name:
         return False
     
@@ -206,7 +206,7 @@ def is_valid_otc_stock(stock_code, stock_name):
     if not stock_code.isdigit() or len(stock_code) < 4:
         return False
     
-    # 上櫃股票代碼範圍（一般為1000-9999）
+    # 上市股票代碼範圍（一般為1000-9999）
     try:
         code_num = int(stock_code)
         if not (1000 <= code_num <= 9999):
@@ -480,8 +480,8 @@ def health_check():
             'stocks_count': len(stocks_data),
             'data_date': data_date,
             'last_update': last_update_str,
-            'market': 'OTC',  # 標記為上櫃市場
-            'version': '4.0 - OTC Market Edition'
+            'market': 'TWSE',  # 標記為上市市場
+            'version': '4.0 - TWSE Market Edition'
         })
     except Exception as e:
         logger.error(f"健康檢查失敗: {str(e)}")
@@ -499,11 +499,11 @@ def update_data():
             
             return jsonify({
                 'success': True,
-                'message': f'成功更新 {len(stocks_data)} 支上櫃股票資料',
+                'message': f'成功更新 {len(stocks_data)} 支上市股票資料',
                 'stocks_count': len(stocks_data),
                 'data_date': data_date,
                 'update_time': update_time_str,
-                'market': 'OTC'
+                'market': 'TWSE'
             })
         else:
             return jsonify({
@@ -529,7 +529,7 @@ def get_stocks():
             'total_count': len(stocks_data),
             'preview_count': len(preview_stocks),
             'data_date': data_date,
-            'market': 'OTC'
+            'market': 'TWSE'
         })
         
     except Exception as e:
@@ -823,7 +823,7 @@ def screen_stocks():
         if not stocks_data:
             return jsonify({
                 'success': False,
-                'error': '請先更新上櫃股票資料'
+                'error': '請先更新上市股票資料'
             }), 400
         
         # 獲取所有股票的完整資料（全部股票分析）
@@ -831,17 +831,17 @@ def screen_stocks():
         total_stocks = len(stocks_data)
         processed_count = 0
         
-        logger.info(f"開始分析 {total_stocks} 支上櫃股票的Pine Script指標...")
+        logger.info(f"開始分析 {total_stocks} 支上市股票的Pine Script指標...")
         
         # 分批處理以避免超時（減少批次大小）
         batch_size = 10  # 從50減少到10支股票每批
         stock_codes = list(stocks_data.keys())
         
         # 限制總處理數量以避免超時
-        max_stocks = min(839, len(stock_codes))  # 最多處理839支上櫃股票
+        max_stocks = min(1044, len(stock_codes))  # 最多處理1044支上市股票
         stock_codes = stock_codes[:max_stocks]
         
-        logger.info(f"為確保穩定性，本次處理前 {max_stocks} 支上櫃股票")
+        logger.info(f"為確保穩定性，本次處理前 {max_stocks} 支上市股票")
         
         for i in range(0, len(stock_codes), batch_size):
             batch_codes = stock_codes[i:i+batch_size]
@@ -877,7 +877,7 @@ def screen_stocks():
         # 篩選出黃柱信號的股票
         yellow_candle_stocks = [stock for stock in all_stocks_data if stock.get('banker_entry_signal', False)]
         
-        logger.info(f"篩選完成：共分析 {processed_count} 支上櫃股票，發現 {len(yellow_candle_stocks)} 支黃柱信號股票")
+        logger.info(f"篩選完成：共分析 {processed_count} 支上市股票，發現 {len(yellow_candle_stocks)} 支黃柱信號股票")
         
         # 按評分排序
         all_stocks_data.sort(key=lambda x: x.get('score', 0), reverse=True)
@@ -891,11 +891,11 @@ def screen_stocks():
             'yellow_candle_count': len(yellow_candle_stocks),
             'query_time': current_time.isoformat(),
             'data_date': data_date,
-            'market': 'OTC'
+            'market': 'TWSE'
         })
         
     except Exception as e:
-        logger.error(f"篩選上櫃股票時發生錯誤: {e}")
+        logger.error(f"篩選上市股票時發生錯誤: {e}")
         return jsonify({
             'success': False,
             'error': f'篩選失敗: {str(e)}'
@@ -903,7 +903,7 @@ def screen_stocks():
 
 if __name__ == '__main__':
     # 啟動Flask應用（移除啟動時數據更新以避免部署超時）
-    logger.info("台股主力資金篩選器 - 上櫃市場版本啟動中...")
+    logger.info("台股主力資金篩選器 - 上市市場版本啟動中...")
     logger.info("💡 請使用 /update 端點手動更新股票數據")
     
     # 啟動Flask應用
