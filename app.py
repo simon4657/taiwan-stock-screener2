@@ -124,29 +124,51 @@ def process_otc_stock_data(raw_data):
                 not any(keyword in stock_name for keyword in ['DR', 'TDR', 'ETF', 'ETN', '權證', '特別股', '存託憑證'])):
                 
                 try:
-                    # 解析數值，處理可能的逗號分隔符
-                    opening_price = float(item.get('OpeningPrice', '0').replace(',', ''))
-                    highest_price = float(item.get('HighestPrice', '0').replace(',', ''))
-                    lowest_price = float(item.get('LowestPrice', '0').replace(',', ''))
-                    closing_price = float(item.get('ClosingPrice', '0').replace(',', ''))
-                    trade_volume = int(item.get('TradeVolume', '0').replace(',', ''))
+                    # 安全的數值轉換函數
+                    def safe_float(value, default=0.0):
+                        try:
+                            if value is None or value == '' or value == '-':
+                                return default
+                            return float(str(value).replace(',', ''))
+                        except (ValueError, TypeError):
+                            return default
+                    
+                    def safe_int(value, default=0):
+                        try:
+                            if value is None or value == '' or value == '-':
+                                return default
+                            return int(str(value).replace(',', ''))
+                        except (ValueError, TypeError):
+                            return default
+                    
+                    # 解析數值，處理可能的逗號分隔符和空值
+                    opening_price = safe_float(item.get('OpeningPrice'))
+                    highest_price = safe_float(item.get('HighestPrice'))
+                    lowest_price = safe_float(item.get('LowestPrice'))
+                    closing_price = safe_float(item.get('ClosingPrice'))
+                    trade_volume = safe_int(item.get('TradeVolume'))
                     
                     # 過濾無效資料
                     if closing_price > 0 and trade_volume > 0:
                         # 計算漲跌幅
-                        change_str = item.get('Change', '0').replace(',', '')
-                        if change_str.startswith('+'):
-                            change = float(change_str[1:])
-                        elif change_str.startswith('-'):
-                            change = -float(change_str[1:])
-                        else:
-                            change = float(change_str) if change_str else 0
+                        change = safe_float(item.get('Change'))
                         
                         # 計算漲跌幅百分比
                         change_percent = (change / (closing_price - change)) * 100 if (closing_price - change) != 0 else 0
                         
-                        # 獲取交易日期
-                        trade_date = item.get('TradeDate', '')
+                        # 獲取交易日期 - 轉換民國年為西元年
+                        trade_date_roc = item.get('Date', '')
+                        if trade_date_roc and len(trade_date_roc) == 7:  # 1140829格式
+                            try:
+                                year = int(trade_date_roc[:3]) + 1911  # 民國年轉西元年
+                                month = trade_date_roc[3:5]
+                                day = trade_date_roc[5:7]
+                                trade_date = f"{year}-{month}-{day}"
+                            except:
+                                trade_date = ''
+                        else:
+                            trade_date = ''
+                        
                         if not current_date and trade_date:
                             current_date = trade_date
                         
