@@ -1,35 +1,37 @@
-# Gunicorn配置檔案 - 解決WORKER TIMEOUT問題
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-# 基本配置
-bind = "0.0.0.0:10000"
-workers = 1
+"""
+Gunicorn配置文件 - 台股主力資金篩選器上櫃市場版本
+"""
 
-# 超時配置（關鍵修復）
-timeout = 300  # 從30秒增加到300秒（5分鐘）
-keepalive = 5
-max_requests = 1000
-max_requests_jitter = 100
+import multiprocessing
 
-# 工作進程配置
-worker_class = "sync"  # 使用同步工作模式
+# 服務器配置
+bind = "0.0.0.0:5000"
+workers = min(2, multiprocessing.cpu_count())  # 減少worker數量以加快啟動
+worker_class = "sync"
 worker_connections = 1000
-preload_app = True
+timeout = 300  # 增加超時時間到5分鐘
+keepalive = 2
 
 # 日誌配置
-loglevel = "info"
 accesslog = "-"
 errorlog = "-"
-access_log_format = '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s" %(D)s'
+loglevel = "info"
+access_log_format = '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s"'
 
-# 進程管理
-graceful_timeout = 30
-tmp_upload_dir = None
+# 進程配置
+max_requests = 1000
+max_requests_jitter = 100
+preload_app = False  # 改為False以避免預載入時的數據更新
 
 # 安全配置
 limit_request_line = 4094
 limit_request_fields = 100
 limit_request_field_size = 8190
 
-# 效能優化
-worker_tmp_dir = "/dev/shm"  # 使用記憶體檔案系統
+# 啟動配置
+graceful_timeout = 60  # 優雅關閉超時
+worker_tmp_dir = "/dev/shm"  # 使用內存文件系統加速
 
