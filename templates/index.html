@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>台股主力資金進入篩選器（上櫃市場）</title>
+    <title>台股主力資金進入篩選器（上市市場）</title>
     <style>
         * {
             margin: 0;
@@ -484,7 +484,7 @@
         </div>
 
         <div class="real-data-notice">
-            ✅ 本系統使用台灣櫃買中心真實上櫃市場資料，提供準確的Pine Script技術分析結果
+            ✅ 本系統使用台灣證券交易所真實上市市場資料，提供準確的Pine Script技術分析結果
         </div>
 
         <div class="content">
@@ -515,7 +515,7 @@
 
             <div id="noResults" class="no-results" style="display: none;">
                 <h3>目前沒有股票符合Pine Script主力進場條件</h3>
-                <p>這表示當前上櫃市場中沒有股票同時滿足以下格條件：</p>
+                <p>這表示當前上市市場中沒有股票同時滿足以下條件：</p>
                 <ul>
                     <li>資金流向突破多空線（crossover）</li>
                     <li>多空線處於超賣區（< 25）</li>
@@ -526,7 +526,7 @@
 
             <div id="loading" class="loading" style="display: none;">
                 <div class="spinner"></div>
-                <p>正在分析上櫃股票資料，請稍候...</p>
+                <p>正在分析上市股票資料，請稍候...</p>
             </div>
         </div>
     </div>
@@ -629,7 +629,7 @@
             updateBtn.textContent = '更新中...';
 
             try {
-                showStatus('正在獲取最新上櫃股票資料...', 'info');
+                showStatus('正在獲取最新上市股票資料...', 'info');
 
                 const response = await fetch('/api/update', {
                     method: 'POST',
@@ -674,7 +674,7 @@
             document.getElementById('loading').style.display = 'block';
 
             try {
-                showStatus('正在分析上櫃股票，尋找主力資金進場信號...', 'info');
+                showStatus('正在分析上市股票，尋找主力資金進場信號...', 'info');
 
                 const response = await fetch('/api/screen', {
                     method: 'POST',
@@ -688,7 +688,7 @@
 
                 if (data.success) {
                     displayResults(data.yellow_candle_stocks, data.query_time, data.data_date);
-                    showStatus(`篩選完成：共分析 ${data.total_analyzed} 支上櫃股票，發現 ${data.yellow_candle_count} 支黃柱信號股票`, 'success');
+                    showStatus(`篩選完成：共分析 ${data.total_analyzed} 支上市股票，發現 ${data.yellow_candle_count} 支黃柱信號股票`, 'success');
                 } else {
                     showStatus(`篩選失敗: ${data.message}`, 'error');
                     document.getElementById('loading').style.display = 'none';
