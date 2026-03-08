@@ -73,37 +73,68 @@ def convert_ad_date_to_roc(ad_date_str):
         return None
 
 def fetch_otc_stock_data():
-    """獲取上市股票資料（從TWSE API）"""
-    try:
-        logger.info("開始獲取上市股票資料...")
-        
-        # 台灣證券交易所API
-        url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        
-        response = requests.get(url, headers=headers, timeout=30, verify=False)
-        response.raise_for_status()
-        
-        data = response.json()
-        logger.info(f"成功獲取證交所資料，共 {len(data)} 筆記錄")
-        
-        return data
-        
-    except requests.exceptions.Timeout:
-        logger.error("證交所API請求超時")
-        return None
-    except requests.exceptions.ConnectionError:
-        logger.error("無法連接到證交所API")
-        return None
-    except requests.exceptions.HTTPError as e:
-        logger.error(f"證交所API HTTP錯誤: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"獲取證交所資料時發生錯誤: {str(e)}")
-        return None
+    """獲取上市股票資料（從TWSE API），含重試機制"""
+    
+    # 主要 API：台灣證券交易所
+    primary_url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'application/json',
+        'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8',
+        'Cache-Control': 'no-cache',
+        'Referer': 'https://www.twse.com.tw/'
+    }
+    
+    # 重試機制：最多嘗試 3 次
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"開始獲取上市股票資料（第 {attempt + 1} 次嘗試）...")
+            
+            response = requests.get(
+                primary_url,
+                headers=headers,
+                timeout=60,  # 增加超時時間至 60 秒
+                verify=False
+            )
+            response.raise_for_status()
+            
+            data = response.json()
+            
+            if not data or len(data) == 0:
+                logger.warning(f"第 {attempt + 1} 次嘗試：TWSE API 回傳空資料")
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+                return None
+            
+            logger.info(f"成功獲取證交所資料，共 {len(data)} 筆記錄")
+            return data
+            
+        except requests.exceptions.Timeout:
+            logger.error(f"第 {attempt + 1} 次嘗試：證交所API請求超時")
+            if attempt < max_retries - 1:
+                time.sleep(3)
+                continue
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"第 {attempt + 1} 次嘗試：無法連接到證交所API: {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(3)
+                continue
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"第 {attempt + 1} 次嘗試：證交所API HTTP錯誤: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+        except Exception as e:
+            logger.error(f"第 {attempt + 1} 次嘗試：獲取證交所資料時發生錯誤: {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+    
+    logger.error("所有重試均失敗，無法獲取 TWSE 資料")
+    return None
 def process_otc_stock_data(raw_data):
     """處理上市股票資料（從TWSE API）"""
     processed_stocks = {}
@@ -462,6 +493,60 @@ def update_stocks_data():
 def index():
     """首頁"""
     return render_template('index.html')
+
+@app.route('/api/diagnose')
+def diagnose():
+    """診斷端點：測試 TWSE API 連線狀況"""
+    import time as time_module
+    result = {
+        'timestamp': get_taiwan_time().strftime('%Y-%m-%d %H:%M:%S'),
+        'tests': {}
+    }
+    
+    # 測試 TWSE API 連線
+    try:
+        start = time_module.time()
+        url = 'https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL'
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json'
+        }
+        response = requests.get(url, headers=headers, timeout=60, verify=False)
+        elapsed = time_module.time() - start
+        
+        result['tests']['twse_api'] = {
+            'status': 'success',
+            'http_code': response.status_code,
+            'elapsed_seconds': round(elapsed, 2),
+            'records_count': len(response.json()) if response.status_code == 200 else 0
+        }
+    except Exception as e:
+        result['tests']['twse_api'] = {
+            'status': 'failed',
+            'error': str(e),
+            'error_type': type(e).__name__
+        }
+    
+    # 測試 DNS 解析
+    try:
+        import socket
+        ip = socket.gethostbyname('openapi.twse.com.tw')
+        result['tests']['dns_resolution'] = {
+            'status': 'success',
+            'ip': ip
+        }
+    except Exception as e:
+        result['tests']['dns_resolution'] = {
+            'status': 'failed',
+            'error': str(e)
+        }
+    
+    # 目前股票資料狀態
+    result['stocks_data_count'] = len(stocks_data)
+    result['data_date'] = data_date
+    result['last_update'] = last_update_time.strftime('%Y-%m-%d %H:%M:%S') if last_update_time else None
+    
+    return jsonify(result)
 
 @app.route('/api/health')
 def health_check():
