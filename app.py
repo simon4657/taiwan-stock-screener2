@@ -72,200 +72,264 @@ def convert_ad_date_to_roc(ad_date_str):
     except:
         return None
 
-def fetch_otc_stock_data():
-    """獲取上市股票資料（從TWSE API），含主要和備用 API 自動切換機制"""
+# ====== 上市股票清單（代碼 -> 名稱）======
+# 此清單用於 Yahoo Finance 批次下載，定期更新
+TWSE_STOCK_LIST = None  # 將在首次更新時從 Yahoo Finance 動態取得
+
+def get_twse_stock_codes():
+    """取得上市股票代碼清單
+    
+    優先嘗試從 TWSE API 取得最新清單，若失敗則使用內建的常見上市股票代碼範圍
+    """
+    global TWSE_STOCK_LIST
+    
+    # 如果已經有快取的清單，直接使用
+    if TWSE_STOCK_LIST:
+        return TWSE_STOCK_LIST
     
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8',
-        'Cache-Control': 'no-cache',
-        'Referer': 'https://www.twse.com.tw/'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
     
-    # API 端點清單（主要 + 備用）
-    # 說明：openapi.twse.com.tw 可能封鎖海外 IP（如 Render 的伺服器）
-    # www.twse.com.tw 的備用端點不受此限制
-    api_sources = [
-        {
-            'name': 'TWSE OpenAPI',
-            'url': 'https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL',
-            'format': 'openapi'  # 回傳 JSON array
-        },
-        {
-            'name': 'TWSE RWD API (備用)',
-            'url': 'https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY_ALL?response=json',
-            'format': 'rwd'  # 回傳 {stat, fields, data} 格式
-        },
-        {
-            'name': 'TWSE Legacy API (備用)',
-            'url': 'https://www.twse.com.tw/exchangeReport/STOCK_DAY_ALL?response=json',
-            'format': 'rwd'  # 同上
-        }
+    # 嘗試從 TWSE API 取得股票清單
+    twse_apis = [
+        'https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL',
+        'https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY_ALL?response=json',
     ]
     
-    for source in api_sources:
-        max_retries = 2
-        for attempt in range(max_retries):
-            try:
-                logger.info(f"嘗試獲取上市股票資料（{source['name']}，第 {attempt + 1} 次）...")
-                
-                response = requests.get(
-                    source['url'],
-                    headers=headers,
-                    timeout=60,
-                    verify=False
-                )
-                response.raise_for_status()
-                
-                # 檢查回傳內容是否為 HTML（被封鎖時的錯誤頁面）
-                content_type = response.headers.get('Content-Type', '')
-                if 'text/html' in content_type:
-                    logger.warning(f"{source['name']} 回傳 HTML 頁面（可能被封鎖），切換備用 API")
-                    break  # 跨出重試循環，嘗試下一個 API
-                
-                raw_json = response.json()
-                
-                # 依據格式轉換為統一的 list 格式
-                if source['format'] == 'openapi':
-                    # 已經是 list 格式
-                    data = raw_json
-                elif source['format'] == 'rwd':
-                    # {stat, date, fields, data} 格式，需要轉換
-                    if raw_json.get('stat') != 'OK' or not raw_json.get('data'):
-                        logger.warning(f"{source['name']} 回傳狀態異常: {raw_json.get('stat')}")
-                        break
-                    
-                    fields = raw_json.get('fields', [])
-                    # fields: ['證券代號', '證券名稱', '成交股數', '成交金額', '開盤價', '最高價', '最低價', '收盤價', '漲跌價差', '成交筆數']
-                    date_str = raw_json.get('date', '')
-                    
-                    data = []
-                    for row in raw_json['data']:
-                        if len(row) >= 9:
-                            item = {
-                                'Code': row[0].strip(),
-                                'Name': row[1].strip(),
-                                'TradeVolume': row[2],
-                                'TradeValue': row[3],
-                                'OpeningPrice': row[4],
-                                'HighestPrice': row[5],
-                                'LowestPrice': row[6],
-                                'ClosingPrice': row[7],
-                                'Change': row[8],
-                                'Transaction': row[9] if len(row) > 9 else '0',
-                                'Date': date_str  # 使用回傳的日期
-                            }
-                            data.append(item)
-                
-                if not data or len(data) == 0:
-                    logger.warning(f"{source['name']} 回傳空資料")
-                    if attempt < max_retries - 1:
-                        time.sleep(2)
-                        continue
-                    break
-                
-                logger.info(f"成功獲取證交所資料（{source['name']}），共 {len(data)} 筆記錄")
-                return data
-                
-            except requests.exceptions.Timeout:
-                logger.error(f"{source['name']} 請求超時")
-                if attempt < max_retries - 1:
-                    time.sleep(3)
-                    continue
-                break
-            except requests.exceptions.ConnectionError as e:
-                logger.error(f"{source['name']} 連線失敗: {str(e)}")
-                if attempt < max_retries - 1:
-                    time.sleep(3)
-                    continue
-                break
-            except requests.exceptions.HTTPError as e:
-                logger.error(f"{source['name']} HTTP 錯誤: {e}")
-                break
-            except Exception as e:
-                logger.error(f"{source['name']} 發生錯誤: {str(e)}")
-                if attempt < max_retries - 1:
-                    time.sleep(2)
-                    continue
-                break
-        
-        logger.warning(f"{source['name']} 失敗，嘗試下一個 API 來源...")
+    for api_url in twse_apis:
+        try:
+            response = requests.get(api_url, headers=headers, timeout=30, verify=False)
+            content_type = response.headers.get('Content-Type', '')
+            if 'text/html' in content_type:
+                continue  # 被封鎖，跳過
+            
+            raw_json = response.json()
+            stock_list = {}
+            
+            if isinstance(raw_json, list):
+                # openapi 格式
+                for item in raw_json:
+                    code = item.get('Code', '').strip()
+                    name = item.get('Name', '').strip()
+                    if code and len(code) == 4 and code.isdigit() and 1000 <= int(code) <= 9999:
+                        if not any(kw in name for kw in ['DR', 'TDR', 'ETF', 'ETN', '權證', '特別股', '存託憑證']):
+                            stock_list[code] = name
+            elif isinstance(raw_json, dict) and raw_json.get('stat') == 'OK':
+                # rwd 格式
+                for row in raw_json.get('data', []):
+                    if len(row) >= 2:
+                        code = row[0].strip()
+                        name = row[1].strip()
+                        if code and len(code) == 4 and code.isdigit() and 1000 <= int(code) <= 9999:
+                            if not any(kw in name for kw in ['DR', 'TDR', 'ETF', 'ETN', '權證', '特別股', '存託憑證']):
+                                stock_list[code] = name
+            
+            if len(stock_list) > 500:
+                TWSE_STOCK_LIST = stock_list
+                logger.info(f"從 TWSE API 取得 {len(stock_list)} 支上市股票清單")
+                return stock_list
+        except Exception as e:
+            logger.warning(f"從 TWSE API 取得股票清單失敗: {e}")
+            continue
     
-    logger.error("所有 API 來源均失敗，無法獲取 TWSE 資料")
-    return None
+    # 如果 TWSE API 全部失敗，使用 Yahoo Finance 動態探測
+    logger.info("TWSE API 不可用，使用 Yahoo Finance 動態探測上市股票清單...")
+    stock_list = discover_twse_stocks_via_yahoo()
+    if stock_list:
+        TWSE_STOCK_LIST = stock_list
+        return stock_list
+    
+    logger.error("無法取得上市股票清單")
+    return {}
+
+def discover_twse_stocks_via_yahoo():
+    """透過 Yahoo Finance API 動態探測有效的上市股票代碼"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    
+    # 產生常見的上市股票代碼範圍
+    candidate_codes = []
+    for i in range(1101, 9999):
+        candidate_codes.append(str(i))
+    
+    valid_stocks = {}
+    
+    def check_stock(code):
+        try:
+            url = f'https://query1.finance.yahoo.com/v8/finance/chart/{code}.TW?interval=1d&range=1d'
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            r = requests.get(url, headers=headers, timeout=5, verify=False)
+            if r.status_code == 200:
+                data = r.json()
+                result = data.get('chart', {}).get('result', [None])[0]
+                if result:
+                    name = result.get('meta', {}).get('shortName', '')
+                    symbol = result.get('meta', {}).get('symbol', '')
+                    if symbol and name:
+                        return (code, name)
+            return None
+        except:
+            return None
+    
+    # 分批探測（每批 500 個代碼）
+    batch_size = 500
+    for i in range(0, len(candidate_codes), batch_size):
+        batch = candidate_codes[i:i+batch_size]
+        with ThreadPoolExecutor(max_workers=30) as executor:
+            futures = {executor.submit(check_stock, code): code for code in batch}
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    valid_stocks[result[0]] = result[1]
+        
+        if len(valid_stocks) > 800:  # 已找到足夠多的股票
+            break
+    
+    logger.info(f"透過 Yahoo Finance 探測到 {len(valid_stocks)} 支上市股票")
+    return valid_stocks
+
+def fetch_single_stock_yahoo(code):
+    """從 Yahoo Finance v8 chart API 取得單支上市股票的即時資料"""
+    try:
+        url = f'https://query1.finance.yahoo.com/v8/finance/chart/{code}.TW?interval=1d&range=2d'
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        r = requests.get(url, headers=headers, timeout=10, verify=False)
+        if r.status_code != 200:
+            return None
+        
+        data = r.json()
+        chart_result = data.get('chart', {}).get('result', [None])[0]
+        if not chart_result:
+            return None
+        
+        meta = chart_result.get('meta', {})
+        indicators = chart_result.get('indicators', {}).get('quote', [{}])[0]
+        timestamps = chart_result.get('timestamp', [])
+        
+        if not timestamps or not indicators.get('close'):
+            return None
+        
+        # 取最後一天的資料
+        idx = -1
+        close_price = indicators['close'][idx]
+        open_price = indicators['open'][idx]
+        high_price = indicators['high'][idx]
+        low_price = indicators['low'][idx]
+        volume = indicators['volume'][idx]
+        
+        if close_price is None or volume is None:
+            return None
+        
+        # 計算漲跌（使用前一天收盤價）
+        prev_close = meta.get('chartPreviousClose', close_price)
+        if len(indicators['close']) >= 2 and indicators['close'][-2] is not None:
+            prev_close = indicators['close'][-2]
+        
+        change = close_price - prev_close
+        change_pct = (change / prev_close * 100) if prev_close != 0 else 0
+        
+        # 取得交易日期（使用台灣時區）
+        trade_date = datetime.fromtimestamp(timestamps[idx], tz=TW_TZ).strftime('%Y-%m-%d')
+        
+        # 取得股票名稱
+        stock_name = meta.get('shortName', '') or meta.get('longName', '')
+        
+        return {
+            'code': code,
+            'name': stock_name,
+            'close': float(close_price),
+            'open': float(open_price) if open_price else float(close_price),
+            'high': float(high_price) if high_price else float(close_price),
+            'low': float(low_price) if low_price else float(close_price),
+            'volume': int(volume),
+            'change': float(change),
+            'change_percent': float(change_pct),
+            'date': trade_date,
+            'market': 'TWSE'
+        }
+    except Exception as e:
+        return None
+
+def fetch_otc_stock_data():
+    """獲取上市股票資料（使用 Yahoo Finance API）
+    
+    由於 TWSE API 封鎖海外伺服器 IP（如 Render），
+    改用 Yahoo Finance v8 chart API 搭配並行請求取得所有上市股票資料。
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    
+    try:
+        logger.info("開始獲取上市股票資料（Yahoo Finance API）...")
+        
+        # 取得上市股票代碼清單
+        stock_list = get_twse_stock_codes()
+        if not stock_list:
+            logger.error("無法取得上市股票代碼清單")
+            return None
+        
+        codes = list(stock_list.keys())
+        logger.info(f"準備下載 {len(codes)} 支上市股票資料...")
+        
+        # 使用並行請求批次下載
+        all_results = []
+        failed_count = 0
+        
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            futures = {executor.submit(fetch_single_stock_yahoo, code): code for code in codes}
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    # 補充股票名稱（如果 Yahoo Finance 沒有回傳名稱，使用清單中的名稱）
+                    if not result['name'] and result['code'] in stock_list:
+                        result['name'] = stock_list[result['code']]
+                    all_results.append(result)
+                else:
+                    failed_count += 1
+        
+        if not all_results:
+            logger.error("Yahoo Finance API 無法取得任何股票資料")
+            return None
+        
+        logger.info(f"成功從 Yahoo Finance 取得 {len(all_results)} 支上市股票資料（失敗 {failed_count} 支）")
+        return all_results
+        
+    except Exception as e:
+        logger.error(f"從 Yahoo Finance 獲取上市股票資料時發生錯誤: {str(e)}")
+        return None
 def process_otc_stock_data(raw_data):
-    """處理上市股票資料（從TWSE API）"""
+    """處理上市股票資料（從 Yahoo Finance API）
+    
+    raw_data 為 fetch_otc_stock_data 回傳的 list，每個元素已經是處理好的 dict 格式。
+    """
     processed_stocks = {}
     current_date = None
     
     try:
         for item in raw_data:
-            # 獲取股票基本資訊
-            stock_code = item.get('Code', '').strip()
-            stock_name = item.get('Name', '').strip()
+            stock_code = item.get('code', '').strip()
+            stock_name = item.get('name', '').strip()
             
             # 過濾條件：只處理上市股票（代碼1000-9999）
             if (stock_code and 
                 len(stock_code) == 4 and 
                 stock_code.isdigit() and
-                1000 <= int(stock_code) <= 9999 and  # 限制為上市股票代碼範圍
-                stock_name and
+                1000 <= int(stock_code) <= 9999 and
                 not any(keyword in stock_name for keyword in ['DR', 'TDR', 'ETF', 'ETN', '權證', '特別股', '存託憑證'])):
                 
                 try:
-                    # 安全的數值轉換函數
-                    def safe_float(value, default=0.0):
-                        try:
-                            if value is None or value == '' or value == '-':
-                                return default
-                            return float(str(value).replace(',', ''))
-                        except (ValueError, TypeError):
-                            return default
-                    
-                    def safe_int(value, default=0):
-                        try:
-                            if value is None or value == '' or value == '-':
-                                return default
-                            return int(str(value).replace(',', ''))
-                        except (ValueError, TypeError):
-                            return default
-                    
-                    # 解析數值，處理可能的逗號分隔符和空值
-                    opening_price = safe_float(item.get('OpeningPrice'))
-                    highest_price = safe_float(item.get('HighestPrice'))
-                    lowest_price = safe_float(item.get('LowestPrice'))
-                    closing_price = safe_float(item.get('ClosingPrice'))
-                    trade_volume = safe_int(item.get('TradeVolume'))
+                    closing_price = float(item.get('close', 0))
+                    opening_price = float(item.get('open', 0))
+                    highest_price = float(item.get('high', 0))
+                    lowest_price = float(item.get('low', 0))
+                    trade_volume = int(item.get('volume', 0))
+                    change = float(item.get('change', 0))
+                    change_percent = float(item.get('change_percent', 0))
+                    trade_date = item.get('date', '')
                     
                     # 過濾無效資料
                     if closing_price > 0 and trade_volume > 0:
-                        # 計算漲跌幅
-                        change = safe_float(item.get('Change'))
-                        
-                        # 計算漲跌幅百分比
-                        change_percent = (change / (closing_price - change)) * 100 if (closing_price - change) != 0 else 0
-                        
-                        # 獲取交易日期 - 支援民國年（7位）和西元年（8位）兩種格式
-                        trade_date_raw = item.get('Date', '')
-                        trade_date = ''
-                        if trade_date_raw and len(trade_date_raw) == 7:  # 1150306 民國年格式
-                            try:
-                                year = int(trade_date_raw[:3]) + 1911  # 民國年轉西元年
-                                month = trade_date_raw[3:5]
-                                day = trade_date_raw[5:7]
-                                trade_date = f"{year}-{month}-{day}"
-                            except:
-                                trade_date = ''
-                        elif trade_date_raw and len(trade_date_raw) == 8:  # 20260306 西元年格式
-                            try:
-                                year = trade_date_raw[:4]
-                                month = trade_date_raw[4:6]
-                                day = trade_date_raw[6:8]
-                                trade_date = f"{year}-{month}-{day}"
-                            except:
-                                trade_date = ''
-                        
                         if not current_date and trade_date:
                             current_date = trade_date
                         
@@ -562,33 +626,67 @@ def index():
 
 @app.route('/api/diagnose')
 def diagnose():
-    """診斷端點：測試所有 TWSE API 來源的連線狀況"""
+    """診斷端點：測試 Yahoo Finance API 和 TWSE API 的連線狀況"""
     import time as time_module
     import socket
     result = {
         'timestamp': get_taiwan_time().strftime('%Y-%m-%d %H:%M:%S'),
+        'data_source': 'Yahoo Finance v8 chart API',
         'tests': {}
     }
     
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8',
-        'Cache-Control': 'no-cache',
-        'Referer': 'https://www.twse.com.tw/'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     }
     
-    # 測試所有 API 來源
-    api_tests = [
-        ('openapi_twse', 'https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL', 'openapi'),
-        ('twse_rwd', 'https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY_ALL?response=json', 'rwd'),
-        ('twse_legacy', 'https://www.twse.com.tw/exchangeReport/STOCK_DAY_ALL?response=json', 'rwd'),
+    # 測試 Yahoo Finance API
+    try:
+        start = time_module.time()
+        url = 'https://query1.finance.yahoo.com/v8/finance/chart/2330.TW?interval=1d&range=1d'
+        response = requests.get(url, headers=headers, timeout=15, verify=False)
+        elapsed = time_module.time() - start
+        
+        if response.status_code == 200:
+            data = response.json()
+            chart_result = data.get('chart', {}).get('result', [None])[0]
+            if chart_result:
+                meta = chart_result.get('meta', {})
+                result['tests']['yahoo_finance'] = {
+                    'status': 'success',
+                    'http_code': 200,
+                    'elapsed_seconds': round(elapsed, 2),
+                    'sample_stock': meta.get('symbol', ''),
+                    'sample_price': meta.get('regularMarketPrice', 0)
+                }
+            else:
+                result['tests']['yahoo_finance'] = {
+                    'status': 'no_data',
+                    'http_code': 200,
+                    'elapsed_seconds': round(elapsed, 2)
+                }
+        else:
+            result['tests']['yahoo_finance'] = {
+                'status': 'failed',
+                'http_code': response.status_code,
+                'elapsed_seconds': round(elapsed, 2)
+            }
+    except Exception as e:
+        result['tests']['yahoo_finance'] = {
+            'status': 'error',
+            'error': str(e),
+            'error_type': type(e).__name__
+        }
+    
+    # 測試 TWSE API（用於取得股票清單）
+    twse_apis = [
+        ('openapi_twse', 'https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL'),
+        ('twse_rwd', 'https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY_ALL?response=json'),
     ]
     
-    for test_name, url, fmt in api_tests:
+    for test_name, url in twse_apis:
         try:
             start = time_module.time()
-            response = requests.get(url, headers=headers, timeout=30, verify=False)
+            response = requests.get(url, headers=headers, timeout=15, verify=False)
             elapsed = time_module.time() - start
             content_type = response.headers.get('Content-Type', 'unknown')
             
@@ -597,54 +695,26 @@ def diagnose():
                     'status': 'blocked',
                     'http_code': response.status_code,
                     'elapsed_seconds': round(elapsed, 2),
-                    'content_type': content_type,
-                    'raw_preview': repr(response.text[:150])
+                    'note': 'TWSE 封鎖海外 IP，已改用 Yahoo Finance'
                 }
-                continue
-            
-            try:
-                json_data = response.json()
-                if fmt == 'openapi':
-                    count = len(json_data) if isinstance(json_data, list) else 0
-                elif fmt == 'rwd':
-                    count = len(json_data.get('data', [])) if isinstance(json_data, dict) else 0
-                    stat = json_data.get('stat', 'N/A') if isinstance(json_data, dict) else 'N/A'
+            else:
                 result['tests'][test_name] = {
-                    'status': 'success',
+                    'status': 'available',
                     'http_code': response.status_code,
-                    'elapsed_seconds': round(elapsed, 2),
-                    'records_count': count
-                }
-                if fmt == 'rwd':
-                    result['tests'][test_name]['stat'] = stat
-            except Exception as json_err:
-                result['tests'][test_name] = {
-                    'status': 'json_error',
-                    'http_code': response.status_code,
-                    'elapsed_seconds': round(elapsed, 2),
-                    'json_error': str(json_err),
-                    'raw_preview': repr(response.text[:150])
+                    'elapsed_seconds': round(elapsed, 2)
                 }
         except Exception as e:
             result['tests'][test_name] = {
-                'status': 'failed',
-                'error': str(e),
-                'error_type': type(e).__name__
+                'status': 'error',
+                'error': str(e)
             }
-    
-    # DNS 解析測試
-    for host in ['openapi.twse.com.tw', 'www.twse.com.tw']:
-        key = 'dns_' + host.replace('.', '_').replace('www_', '')
-        try:
-            ip = socket.gethostbyname(host)
-            result['tests'][key] = {'status': 'success', 'ip': ip}
-        except Exception as e:
-            result['tests'][key] = {'status': 'failed', 'error': str(e)}
     
     # 目前股票資料狀態
     result['stocks_data_count'] = len(stocks_data)
     result['data_date'] = data_date
     result['last_update'] = last_update_time.strftime('%Y-%m-%d %H:%M:%S') if last_update_time else None
+    result['stock_list_cached'] = TWSE_STOCK_LIST is not None
+    result['stock_list_count'] = len(TWSE_STOCK_LIST) if TWSE_STOCK_LIST else 0
     
     return jsonify(result)
 
@@ -666,7 +736,7 @@ def health_check():
             'data_date': data_date,
             'last_update': last_update_str,
             'market': 'TWSE',  # 標記為上市市場
-            'version': '4.0 - TWSE Market Edition'
+            'version': '5.0 - TWSE Market Edition (Yahoo Finance)'
         })
     except Exception as e:
         logger.error(f"健康檢查失敗: {str(e)}")
