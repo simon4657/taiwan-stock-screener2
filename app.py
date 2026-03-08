@@ -73,67 +73,126 @@ def convert_ad_date_to_roc(ad_date_str):
         return None
 
 def fetch_otc_stock_data():
-    """獲取上市股票資料（從TWSE API），含重試機制"""
-    
-    # 主要 API：台灣證券交易所
-    primary_url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+    """獲取上市股票資料（從TWSE API），含主要和備用 API 自動切換機制"""
     
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'application/json',
+        'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8',
         'Cache-Control': 'no-cache',
         'Referer': 'https://www.twse.com.tw/'
     }
     
-    # 重試機制：最多嘗試 3 次
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            logger.info(f"開始獲取上市股票資料（第 {attempt + 1} 次嘗試）...")
-            
-            response = requests.get(
-                primary_url,
-                headers=headers,
-                timeout=60,  # 增加超時時間至 60 秒
-                verify=False
-            )
-            response.raise_for_status()
-            
-            data = response.json()
-            
-            if not data or len(data) == 0:
-                logger.warning(f"第 {attempt + 1} 次嘗試：TWSE API 回傳空資料")
+    # API 端點清單（主要 + 備用）
+    # 說明：openapi.twse.com.tw 可能封鎖海外 IP（如 Render 的伺服器）
+    # www.twse.com.tw 的備用端點不受此限制
+    api_sources = [
+        {
+            'name': 'TWSE OpenAPI',
+            'url': 'https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL',
+            'format': 'openapi'  # 回傳 JSON array
+        },
+        {
+            'name': 'TWSE RWD API (備用)',
+            'url': 'https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY_ALL?response=json',
+            'format': 'rwd'  # 回傳 {stat, fields, data} 格式
+        },
+        {
+            'name': 'TWSE Legacy API (備用)',
+            'url': 'https://www.twse.com.tw/exchangeReport/STOCK_DAY_ALL?response=json',
+            'format': 'rwd'  # 同上
+        }
+    ]
+    
+    for source in api_sources:
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"嘗試獲取上市股票資料（{source['name']}，第 {attempt + 1} 次）...")
+                
+                response = requests.get(
+                    source['url'],
+                    headers=headers,
+                    timeout=60,
+                    verify=False
+                )
+                response.raise_for_status()
+                
+                # 檢查回傳內容是否為 HTML（被封鎖時的錯誤頁面）
+                content_type = response.headers.get('Content-Type', '')
+                if 'text/html' in content_type:
+                    logger.warning(f"{source['name']} 回傳 HTML 頁面（可能被封鎖），切換備用 API")
+                    break  # 跨出重試循環，嘗試下一個 API
+                
+                raw_json = response.json()
+                
+                # 依據格式轉換為統一的 list 格式
+                if source['format'] == 'openapi':
+                    # 已經是 list 格式
+                    data = raw_json
+                elif source['format'] == 'rwd':
+                    # {stat, date, fields, data} 格式，需要轉換
+                    if raw_json.get('stat') != 'OK' or not raw_json.get('data'):
+                        logger.warning(f"{source['name']} 回傳狀態異常: {raw_json.get('stat')}")
+                        break
+                    
+                    fields = raw_json.get('fields', [])
+                    # fields: ['證券代號', '證券名稱', '成交股數', '成交金額', '開盤價', '最高價', '最低價', '收盤價', '漲跌價差', '成交筆數']
+                    date_str = raw_json.get('date', '')
+                    
+                    data = []
+                    for row in raw_json['data']:
+                        if len(row) >= 9:
+                            item = {
+                                'Code': row[0].strip(),
+                                'Name': row[1].strip(),
+                                'TradeVolume': row[2],
+                                'TradeValue': row[3],
+                                'OpeningPrice': row[4],
+                                'HighestPrice': row[5],
+                                'LowestPrice': row[6],
+                                'ClosingPrice': row[7],
+                                'Change': row[8],
+                                'Transaction': row[9] if len(row) > 9 else '0',
+                                'Date': date_str  # 使用回傳的日期
+                            }
+                            data.append(item)
+                
+                if not data or len(data) == 0:
+                    logger.warning(f"{source['name']} 回傳空資料")
+                    if attempt < max_retries - 1:
+                        time.sleep(2)
+                        continue
+                    break
+                
+                logger.info(f"成功獲取證交所資料（{source['name']}），共 {len(data)} 筆記錄")
+                return data
+                
+            except requests.exceptions.Timeout:
+                logger.error(f"{source['name']} 請求超時")
+                if attempt < max_retries - 1:
+                    time.sleep(3)
+                    continue
+                break
+            except requests.exceptions.ConnectionError as e:
+                logger.error(f"{source['name']} 連線失敗: {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(3)
+                    continue
+                break
+            except requests.exceptions.HTTPError as e:
+                logger.error(f"{source['name']} HTTP 錯誤: {e}")
+                break
+            except Exception as e:
+                logger.error(f"{source['name']} 發生錯誤: {str(e)}")
                 if attempt < max_retries - 1:
                     time.sleep(2)
                     continue
-                return None
-            
-            logger.info(f"成功獲取證交所資料，共 {len(data)} 筆記錄")
-            return data
-            
-        except requests.exceptions.Timeout:
-            logger.error(f"第 {attempt + 1} 次嘗試：證交所API請求超時")
-            if attempt < max_retries - 1:
-                time.sleep(3)
-                continue
-        except requests.exceptions.ConnectionError as e:
-            logger.error(f"第 {attempt + 1} 次嘗試：無法連接到證交所API: {str(e)}")
-            if attempt < max_retries - 1:
-                time.sleep(3)
-                continue
-        except requests.exceptions.HTTPError as e:
-            logger.error(f"第 {attempt + 1} 次嘗試：證交所API HTTP錯誤: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(2)
-                continue
-        except Exception as e:
-            logger.error(f"第 {attempt + 1} 次嘗試：獲取證交所資料時發生錯誤: {str(e)}")
-            if attempt < max_retries - 1:
-                time.sleep(2)
-                continue
+                break
+        
+        logger.warning(f"{source['name']} 失敗，嘗試下一個 API 來源...")
     
-    logger.error("所有重試均失敗，無法獲取 TWSE 資料")
+    logger.error("所有 API 來源均失敗，無法獲取 TWSE 資料")
     return None
 def process_otc_stock_data(raw_data):
     """處理上市股票資料（從TWSE API）"""
@@ -187,18 +246,25 @@ def process_otc_stock_data(raw_data):
                         # 計算漲跌幅百分比
                         change_percent = (change / (closing_price - change)) * 100 if (closing_price - change) != 0 else 0
                         
-                        # 獲取交易日期 - 轉換民國年為西元年
-                        trade_date_roc = item.get('Date', '')
-                        if trade_date_roc and len(trade_date_roc) == 7:  # 1140829格式
+                        # 獲取交易日期 - 支援民國年（7位）和西元年（8位）兩種格式
+                        trade_date_raw = item.get('Date', '')
+                        trade_date = ''
+                        if trade_date_raw and len(trade_date_raw) == 7:  # 1150306 民國年格式
                             try:
-                                year = int(trade_date_roc[:3]) + 1911  # 民國年轉西元年
-                                month = trade_date_roc[3:5]
-                                day = trade_date_roc[5:7]
+                                year = int(trade_date_raw[:3]) + 1911  # 民國年轉西元年
+                                month = trade_date_raw[3:5]
+                                day = trade_date_raw[5:7]
                                 trade_date = f"{year}-{month}-{day}"
                             except:
                                 trade_date = ''
-                        else:
-                            trade_date = ''
+                        elif trade_date_raw and len(trade_date_raw) == 8:  # 20260306 西元年格式
+                            try:
+                                year = trade_date_raw[:4]
+                                month = trade_date_raw[4:6]
+                                day = trade_date_raw[6:8]
+                                trade_date = f"{year}-{month}-{day}"
+                            except:
+                                trade_date = ''
                         
                         if not current_date and trade_date:
                             current_date = trade_date
