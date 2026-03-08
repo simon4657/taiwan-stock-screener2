@@ -508,18 +508,36 @@ def diagnose():
         start = time_module.time()
         url = 'https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL'
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'application/json',
+            'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8',
+            'Cache-Control': 'no-cache',
+            'Referer': 'https://www.twse.com.tw/'
         }
         response = requests.get(url, headers=headers, timeout=60, verify=False)
         elapsed = time_module.time() - start
         
-        result['tests']['twse_api'] = {
-            'status': 'success',
-            'http_code': response.status_code,
-            'elapsed_seconds': round(elapsed, 2),
-            'records_count': len(response.json()) if response.status_code == 200 else 0
-        }
+        content_type = response.headers.get('Content-Type', 'unknown')
+        raw_preview = repr(response.text[:200]) if response.text else '(empty)'
+        
+        try:
+            json_data = response.json()
+            result['tests']['twse_api'] = {
+                'status': 'success',
+                'http_code': response.status_code,
+                'elapsed_seconds': round(elapsed, 2),
+                'content_type': content_type,
+                'records_count': len(json_data)
+            }
+        except Exception as json_err:
+            result['tests']['twse_api'] = {
+                'status': 'json_parse_failed',
+                'http_code': response.status_code,
+                'elapsed_seconds': round(elapsed, 2),
+                'content_type': content_type,
+                'json_error': str(json_err),
+                'raw_preview': raw_preview
+            }
     except Exception as e:
         result['tests']['twse_api'] = {
             'status': 'failed',
