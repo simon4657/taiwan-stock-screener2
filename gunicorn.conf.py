@@ -7,15 +7,15 @@ Gunicorn配置文件 - 台股主力資金篩選器上市市場版本
 重要說明：
 - 使用單一 worker（workers=1）確保全域變數（stocks_data、update_status）在所有請求間共享
 - 多 worker 會導致後台執行緒和全域狀態無法跨 worker 共享
-- 使用 gevent worker 支援非同步 I/O，避免長時間請求阻塞
+- 使用 threads 支援並行請求處理
 """
 
 # 服務器配置
 bind = "0.0.0.0:5000"
 workers = 1  # 必須使用單一 worker，確保全域變數共享（stocks_data, update_status）
-worker_class = "gevent"  # 使用 gevent 支援非同步 I/O
-worker_connections = 1000
-timeout = 600  # 增加超時時間到 10 分鐘（Yahoo Finance 批次下載需要約 2 分鐘）
+worker_class = "gthread"  # 使用 gthread 支援多執行緒請求處理
+threads = 4  # 每個 worker 使用 4 個執行緒
+timeout = 600  # 增加超時時間到 10 分鐘（Yahoo Finance 批次下載約需 2 分鐘）
 keepalive = 5
 
 # 日誌配置
