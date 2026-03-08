@@ -32,6 +32,19 @@ stocks_data = {}
 last_update_time = None
 data_date = None
 
+# 非同步更新狀態
+import threading
+update_status = {
+    'is_running': False,
+    'progress': 0,
+    'total': 0,
+    'message': '',
+    'success': None,  # None=未開始, True=成功, False=失敗
+    'started_at': None,
+    'finished_at': None
+}
+update_lock = threading.Lock()
+
 # 台灣時區
 TW_TZ = pytz.timezone('Asia/Taipei')
 
@@ -276,6 +289,10 @@ def fetch_otc_stock_data():
         all_results = []
         failed_count = 0
         
+        update_status['total'] = len(codes)
+        update_status['progress'] = 0
+        update_status['message'] = f'正在下載 {len(codes)} 支上市股票資料...'
+        
         with ThreadPoolExecutor(max_workers=20) as executor:
             futures = {executor.submit(fetch_single_stock_yahoo, code): code for code in codes}
             for future in as_completed(futures):
@@ -287,6 +304,9 @@ def fetch_otc_stock_data():
                     all_results.append(result)
                 else:
                     failed_count += 1
+                
+                # 更新進度
+                update_status['progress'] = len(all_results) + failed_count
         
         if not all_results:
             logger.error("Yahoo Finance API 無法取得任何股票資料")
@@ -588,26 +608,70 @@ def calculate_ema(values, period):
     
     return ema
 
-def update_stocks_data():
-    """更新股票資料"""
-    global stocks_data, last_update_time, data_date
+def update_stocks_data_background():
+    """後台執行的更新任務"""
+    global stocks_data, last_update_time, data_date, update_status
     
     try:
-        logger.info("開始更新上市股票資料...")
+        update_status['message'] = '正在取得上市股票清單...'
+        logger.info("開始後台更新上市股票資料...")
         
         # 獲取上市股票資料
         raw_data = fetch_otc_stock_data()
         if not raw_data:
             logger.error("無法獲取上市股票資料")
-            return False
+            update_status['is_running'] = False
+            update_status['success'] = False
+            update_status['message'] = '無法獲取股票資料，請稍後再試'
+            update_status['finished_at'] = get_taiwan_time().strftime('%Y-%m-%d %H:%M:%S')
+            return
+        
+        update_status['message'] = '正在處理股票資料...'
         
         # 處理資料
         processed_data, current_date = process_otc_stock_data(raw_data)
         if not processed_data:
             logger.error("處理上市股票資料失敗")
-            return False
+            update_status['is_running'] = False
+            update_status['success'] = False
+            update_status['message'] = '處理股票資料失敗，請稍後再試'
+            update_status['finished_at'] = get_taiwan_time().strftime('%Y-%m-%d %H:%M:%S')
+            return
         
         # 更新全域變數
+        stocks_data = processed_data
+        data_date = current_date
+        last_update_time = get_taiwan_time()
+        
+        update_status['is_running'] = False
+        update_status['success'] = True
+        update_status['message'] = f'成功更新 {len(stocks_data)} 支上市股票資料'
+        update_status['finished_at'] = get_taiwan_time().strftime('%Y-%m-%d %H:%M:%S')
+        
+        logger.info(f"後台更新完成：{len(stocks_data)} 支上市股票資料，資料日期: {data_date}")
+        
+    except Exception as e:
+        logger.error(f"後台更新上市股票資料時發生錯誤: {str(e)}")
+        update_status['is_running'] = False
+        update_status['success'] = False
+        update_status['message'] = f'更新失敗: {str(e)}'
+        update_status['finished_at'] = get_taiwan_time().strftime('%Y-%m-%d %H:%M:%S')
+
+def update_stocks_data():
+    """更新股票資料（直接同步版本，保留相容）"""
+    global stocks_data, last_update_time, data_date
+    
+    try:
+        logger.info("開始更新上市股票資料...")
+        
+        raw_data = fetch_otc_stock_data()
+        if not raw_data:
+            return False
+        
+        processed_data, current_date = process_otc_stock_data(raw_data)
+        if not processed_data:
+            return False
+        
         stocks_data = processed_data
         data_date = current_date
         last_update_time = get_taiwan_time()
@@ -744,33 +808,71 @@ def health_check():
 
 @app.route('/api/update', methods=['POST'])
 def update_data():
-    """更新股票資料API"""
+    """更新股票資料API（非同步版本）"""
+    global update_status
+    
     try:
-        if update_stocks_data():
-            # 確保時間格式正確
-            update_time_str = None
-            if last_update_time:
-                update_time_str = last_update_time.strftime('%Y-%m-%d %H:%M:%S')
+        with update_lock:
+            if update_status['is_running']:
+                return jsonify({
+                    'success': True,
+                    'async': True,
+                    'status': 'running',
+                    'message': '更新已在進行中，請稍候...',
+                    'progress': update_status['progress'],
+                    'total': update_status['total']
+                })
             
-            return jsonify({
-                'success': True,
-                'message': f'成功更新 {len(stocks_data)} 支上市股票資料',
-                'stocks_count': len(stocks_data),
-                'data_date': data_date,
-                'update_time': update_time_str,
-                'market': 'TWSE'
-            })
-        else:
-            return jsonify({
-                'success': False,
-                'message': '更新失敗，請稍後再試'
-            }), 500
+            # 重置狀態並啟動後台執行緒
+            update_status['is_running'] = True
+            update_status['success'] = None
+            update_status['progress'] = 0
+            update_status['total'] = 0
+            update_status['message'] = '正在初始化...'
+            update_status['started_at'] = get_taiwan_time().strftime('%Y-%m-%d %H:%M:%S')
+            update_status['finished_at'] = None
+        
+        # 在後台執行緒中啟動更新
+        thread = threading.Thread(target=update_stocks_data_background, daemon=True)
+        thread.start()
+        
+        return jsonify({
+            'success': True,
+            'async': True,
+            'status': 'started',
+            'message': '更新已在後台啟動，請稍候約 60-90 秒...'
+        })
+        
     except Exception as e:
         logger.error(f"更新API錯誤: {str(e)}")
+        update_status['is_running'] = False
         return jsonify({
             'success': False,
             'message': f'更新失敗: {str(e)}'
         }), 500
+
+@app.route('/api/update_status')
+def get_update_status():
+    """查詢更新進度"""
+    try:
+        last_update_str = None
+        if last_update_time:
+            last_update_str = last_update_time.strftime('%Y-%m-%d %H:%M:%S')
+        
+        return jsonify({
+            'is_running': update_status['is_running'],
+            'progress': update_status['progress'],
+            'total': update_status['total'],
+            'message': update_status['message'],
+            'success': update_status['success'],
+            'started_at': update_status['started_at'],
+            'finished_at': update_status['finished_at'],
+            'stocks_count': len(stocks_data),
+            'data_date': data_date,
+            'last_update': last_update_str
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/stocks')
 def get_stocks():

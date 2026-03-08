@@ -629,27 +629,88 @@
             updateBtn.textContent = '更新中...';
 
             try {
-                showStatus('正在獲取最新上市股票資料...', 'info');
+                showStatus('正在啟動股票資料更新...', 'info');
 
+                // 發送更新請求（立即回應，後台執行）
                 const response = await fetch('/api/update', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
+                    headers: { 'Content-Type': 'application/json' }
                 });
-
                 const data = await response.json();
 
-                if (data.success) {
-                    updateTimeInfo(data.update_time, data.data_date);
-                    showStatus(`成功更新 ${data.stocks_count} 支上市股票資料`, 'success');
-                } else {
+                if (!data.success) {
                     showStatus(`更新失敗: ${data.message}`, 'error');
+                    return;
                 }
+
+                // 非同步模式：輪詢進度
+                showStatus('更新已在後台啟動，正在下載股票資料（約 60-90 秒）...', 'info');
+
+                let pollCount = 0;
+                const maxPolls = 60; // 最多輪詢 60 次 = 5 分鐘
+
+                const pollStatus = async () => {
+                    try {
+                        const statusRes = await fetch('/api/update_status');
+                        const status = await statusRes.json();
+
+                        if (status.is_running) {
+                            // 更新進度訊息
+                            const progress = status.total > 0
+                                ? `${status.progress}/${status.total} 支`
+                                : '';
+                            updateBtn.textContent = `更新中 ${progress}`;
+                            showStatus(`${status.message}${progress ? ' (' + progress + ')' : ''}`, 'info');
+
+                            pollCount++;
+                            if (pollCount < maxPolls) {
+                                setTimeout(pollStatus, 5000);
+                            } else {
+                                showStatus('更新超時，請稍後再試', 'error');
+                                isUpdating = false;
+                                updateBtn.disabled = false;
+                                updateBtn.textContent = '更新股票資料';
+                            }
+                        } else if (status.success === true) {
+                            // 更新成功
+                            updateTimeInfo(status.last_update, status.data_date);
+                            showStatus(`✅ ${status.message}（資料日期: ${status.data_date || '-'}）`, 'success');
+                            isUpdating = false;
+                            updateBtn.disabled = false;
+                            updateBtn.textContent = '更新股票資料';
+                        } else if (status.success === false) {
+                            // 更新失敗
+                            showStatus(`更新失敗: ${status.message}`, 'error');
+                            isUpdating = false;
+                            updateBtn.disabled = false;
+                            updateBtn.textContent = '更新股票資料';
+                        } else {
+                            // 尚未開始，繼續輪詢
+                            pollCount++;
+                            if (pollCount < maxPolls) {
+                                setTimeout(pollStatus, 3000);
+                            }
+                        }
+                    } catch (err) {
+                        console.error('輪詢狀態失敗:', err);
+                        pollCount++;
+                        if (pollCount < maxPolls) {
+                            setTimeout(pollStatus, 5000);
+                        } else {
+                            showStatus('無法取得更新狀態，請稍後再試', 'error');
+                            isUpdating = false;
+                            updateBtn.disabled = false;
+                            updateBtn.textContent = '更新股票資料';
+                        }
+                    }
+                };
+
+                // 延遲 3 秒後開始輪詢
+                setTimeout(pollStatus, 3000);
+
             } catch (error) {
                 console.error('更新錯誤:', error);
                 showStatus('更新失敗，請檢查網路連線', 'error');
-            } finally {
                 isUpdating = false;
                 updateBtn.disabled = false;
                 updateBtn.textContent = '更新股票資料';
