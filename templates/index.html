@@ -162,6 +162,83 @@
             border: 1px solid #90cdf4;
         }
 
+        /* 進度條樣式 */
+        .progress-container {
+            display: none;
+            margin-bottom: 20px;
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid #e2e8f0;
+            border-radius: 16px;
+            padding: 20px 25px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+        }
+
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .progress-label {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: #4a5568;
+        }
+
+        .progress-percent {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: #667eea;
+        }
+
+        .progress-track {
+            width: 100%;
+            height: 14px;
+            background: #e2e8f0;
+            border-radius: 999px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .progress-bar {
+            height: 100%;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+            background-size: 200% 100%;
+            animation: progressShimmer 2s linear infinite;
+            transition: width 0.4s ease;
+            width: 0%;
+        }
+
+        @keyframes progressShimmer {
+            0% { background-position: 200% center; }
+            100% { background-position: -200% center; }
+        }
+
+        .progress-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 10px;
+        }
+
+        .progress-count {
+            font-size: 0.85rem;
+            color: #718096;
+        }
+
+        .progress-status {
+            font-size: 0.85rem;
+            color: #718096;
+            font-style: italic;
+        }
+
+        .progress-bar.complete {
+            animation: none;
+            background: linear-gradient(90deg, #48bb78 0%, #38a169 100%);
+        }
+
         .results {
             margin-top: 30px;
         }
@@ -495,6 +572,21 @@
 
             <div id="statusMessage" class="status-message"></div>
 
+            <!-- 進度條區塊 -->
+            <div id="progressContainer" class="progress-container">
+                <div class="progress-header">
+                    <span class="progress-label" id="progressLabel">正在下載上市股票資料...</span>
+                    <span class="progress-percent" id="progressPercent">0%</span>
+                </div>
+                <div class="progress-track">
+                    <div class="progress-bar" id="progressBar"></div>
+                </div>
+                <div class="progress-footer">
+                    <span class="progress-count" id="progressCount">0 / 0 支</span>
+                    <span class="progress-status" id="progressTime">請耐心等候，預計需要 3-5 分鐘...</span>
+                </div>
+            </div>
+
             <div id="results" class="results" style="display: none;">
                 <div class="results-header">
                     <h3>篩選結果</h3>
@@ -616,6 +708,65 @@
             }
         }
 
+        // 進度條控制函數
+        function showProgress(progress, total, message) {
+            const container = document.getElementById('progressContainer');
+            const bar = document.getElementById('progressBar');
+            const percent = document.getElementById('progressPercent');
+            const count = document.getElementById('progressCount');
+            const label = document.getElementById('progressLabel');
+            const timeEl = document.getElementById('progressTime');
+
+            container.style.display = 'block';
+            bar.classList.remove('complete');
+
+            const pct = total > 0 ? Math.round((progress / total) * 100) : 0;
+            bar.style.width = pct + '%';
+            percent.textContent = pct + '%';
+            count.textContent = `${progress.toLocaleString()} / ${total.toLocaleString()} 支`;
+            label.textContent = message || '正在下載上市股票資料...';
+
+            // 預估剩餘時間（每支約 0.3 秒）
+            const remaining = total > 0 && progress > 0
+                ? Math.ceil(((total - progress) / progress) * (Date.now() - updateStartTime) / 1000)
+                : null;
+            if (remaining !== null && remaining > 0) {
+                const mins = Math.floor(remaining / 60);
+                const secs = remaining % 60;
+                timeEl.textContent = mins > 0
+                    ? `預計還需約 ${mins} 分 ${secs} 秒`
+                    : `預計還需約 ${secs} 秒`;
+            } else {
+                timeEl.textContent = '請耐心等候...';
+            }
+        }
+
+        function completeProgress(message) {
+            const bar = document.getElementById('progressBar');
+            const percent = document.getElementById('progressPercent');
+            const label = document.getElementById('progressLabel');
+            const timeEl = document.getElementById('progressTime');
+
+            bar.style.width = '100%';
+            bar.classList.add('complete');
+            percent.textContent = '100%';
+            percent.style.color = '#38a169';
+            label.textContent = message || '更新完成！';
+            timeEl.textContent = '';
+
+            // 3 秒後隱藏進度條
+            setTimeout(() => {
+                document.getElementById('progressContainer').style.display = 'none';
+                percent.style.color = '';
+            }, 3000);
+        }
+
+        function hideProgress() {
+            document.getElementById('progressContainer').style.display = 'none';
+        }
+
+        let updateStartTime = 0;
+
         // 更新股票資料
         async function updateStockData() {
             if (isUpdating) {
@@ -624,12 +775,14 @@
             }
 
             isUpdating = true;
+            updateStartTime = Date.now();
             const updateBtn = document.getElementById('updateBtn');
             updateBtn.disabled = true;
             updateBtn.textContent = '更新中...';
 
             try {
                 showStatus('正在啟動股票資料更新...', 'info');
+                showProgress(0, 1068, '正在連線並取得股票清單...');
 
                 // 發送更新請求（立即回應，後台執行）
                 const response = await fetch('/api/update', {
@@ -640,14 +793,18 @@
 
                 if (!data.success) {
                     showStatus(`更新失敗: ${data.message}`, 'error');
+                    hideProgress();
+                    isUpdating = false;
+                    updateBtn.disabled = false;
+                    updateBtn.textContent = '更新股票資料';
                     return;
                 }
 
                 // 非同步模式：輪詢進度
-                showStatus('更新已在後台啟動，正在下載股票資料（約 60-90 秒）...', 'info');
+                showStatus('更新已在後台啟動，請稍候...', 'info');
 
                 let pollCount = 0;
-                const maxPolls = 60; // 最多輪詢 60 次 = 5 分鐘
+                const maxPolls = 72; // 最多輪詢 72 次 = 6 分鐘
 
                 const pollStatus = async () => {
                     try {
@@ -655,24 +812,25 @@
                         const status = await statusRes.json();
 
                         if (status.is_running) {
-                            // 更新進度訊息
-                            const progress = status.total > 0
-                                ? `${status.progress}/${status.total} 支`
-                                : '';
-                            updateBtn.textContent = `更新中 ${progress}`;
-                            showStatus(`${status.message}${progress ? ' (' + progress + ')' : ''}`, 'info');
+                            // 更新進度條
+                            const prog = status.progress || 0;
+                            const tot = status.total || 1068;
+                            showProgress(prog, tot, status.message);
+                            updateBtn.textContent = `更新中 ${prog}/${tot}`;
 
                             pollCount++;
                             if (pollCount < maxPolls) {
                                 setTimeout(pollStatus, 5000);
                             } else {
                                 showStatus('更新超時，請稍後再試', 'error');
+                                hideProgress();
                                 isUpdating = false;
                                 updateBtn.disabled = false;
                                 updateBtn.textContent = '更新股票資料';
                             }
                         } else if (status.success === true) {
                             // 更新成功
+                            completeProgress(`成功更新 ${status.stocks_count} 支上市股票！`);
                             updateTimeInfo(status.last_update, status.data_date);
                             showStatus(`✅ ${status.message}（資料日期: ${status.data_date || '-'}）`, 'success');
                             isUpdating = false;
@@ -681,6 +839,7 @@
                         } else if (status.success === false) {
                             // 更新失敗
                             showStatus(`更新失敗: ${status.message}`, 'error');
+                            hideProgress();
                             isUpdating = false;
                             updateBtn.disabled = false;
                             updateBtn.textContent = '更新股票資料';
@@ -698,6 +857,7 @@
                             setTimeout(pollStatus, 5000);
                         } else {
                             showStatus('無法取得更新狀態，請稍後再試', 'error');
+                            hideProgress();
                             isUpdating = false;
                             updateBtn.disabled = false;
                             updateBtn.textContent = '更新股票資料';
@@ -711,6 +871,7 @@
             } catch (error) {
                 console.error('更新錯誤:', error);
                 showStatus('更新失敗，請檢查網路連線', 'error');
+                hideProgress();
                 isUpdating = false;
                 updateBtn.disabled = false;
                 updateBtn.textContent = '更新股票資料';
