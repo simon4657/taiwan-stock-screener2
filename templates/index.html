@@ -630,6 +630,65 @@
         // 初始化應用
         async function initializeApp() {
             try {
+                // 先檢查是否有更新正在進行
+                const statusRes = await fetch('/api/update_status');
+                const updateStatusData = await statusRes.json();
+
+                if (updateStatusData.is_running) {
+                    // 有更新正在進行，顯示進度條並開始輪詢
+                    isUpdating = true;
+                    updateStartTime = Date.now();
+                    const updateBtn = document.getElementById('updateBtn');
+                    updateBtn.disabled = true;
+                    const prog = updateStatusData.progress || 0;
+                    const tot = updateStatusData.total || 1068;
+                    showProgress(prog, tot, updateStatusData.message);
+                    updateBtn.textContent = `更新中 ${prog}/${tot}`;
+                    showStatus('偵測到股票資料更新正在進行中，請稍候...', 'info');
+
+                    // 繼續輪詢進度
+                    let pollCount = 0;
+                    const maxPolls = 72;
+                    const pollStatus = async () => {
+                        try {
+                            const sRes = await fetch('/api/update_status');
+                            const s = await sRes.json();
+                            if (s.is_running) {
+                                const p = s.progress || 0;
+                                const t = s.total || 1068;
+                                showProgress(p, t, s.message);
+                                updateBtn.textContent = `更新中 ${p}/${t}`;
+                                pollCount++;
+                                if (pollCount < maxPolls) setTimeout(pollStatus, 5000);
+                            } else if (s.success === true) {
+                                completeProgress(`成功更新 ${s.stocks_count} 支上市股票！`);
+                                updateTimeInfo(s.last_update, s.data_date);
+                                showStatus(`✅ ${s.message}（資料日期: ${s.data_date || '-'}）`, 'success');
+                                isUpdating = false;
+                                updateBtn.disabled = false;
+                                updateBtn.textContent = '更新股票資料';
+                            } else {
+                                hideProgress();
+                                isUpdating = false;
+                                updateBtn.disabled = false;
+                                updateBtn.textContent = '更新股票資料';
+                                // 更新完成，重新檢查健康狀態
+                                const hRes = await fetch('/api/health');
+                                const hData = await hRes.json();
+                                updateTimeInfo(hData.last_update, hData.data_date);
+                                if (hData.stocks_count > 0) {
+                                    showStatus(`系統已就緒，已載入 ${hData.stocks_count} 支上市股票資料`, 'success');
+                                }
+                            }
+                        } catch (err) {
+                            pollCount++;
+                            if (pollCount < maxPolls) setTimeout(pollStatus, 5000);
+                        }
+                    };
+                    setTimeout(pollStatus, 5000);
+                    return;
+                }
+
                 // 檢查健康狀態
                 const healthResponse = await fetch('/api/health');
                 const healthData = await healthResponse.json();
