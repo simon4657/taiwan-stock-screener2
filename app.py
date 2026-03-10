@@ -1366,8 +1366,8 @@ def fetch_otc_stock_data():
             for future in as_completed(futures):
                 result = future.result()
                 if result:
-                    # 補充股票名稱（如果 Yahoo Finance 沒有回傳名稱，使用清單中的名稱）
-                    if not result['name'] and result['code'] in stock_list:
+                    # 優先使用 TWSE 清單中的中文簡稱，Yahoo Finance 回傳的是英文名稱
+                    if result['code'] in stock_list:
                         result['name'] = stock_list[result['code']]
                     all_results.append(result)
                 else:
