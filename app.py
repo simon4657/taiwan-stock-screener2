@@ -1475,47 +1475,70 @@ def is_valid_otc_stock(stock_code, stock_name):
     
     return True
 
-def calculate_weighted_simple_average(src_values, length, weight):
-    """完全按照Pine Script邏輯實現的加權移動平均"""
+def pine_nz(value, fallback=0.0):
+    """Pine Script nz() equivalent for numeric series values."""
+    return fallback if value is None else value
+
+def safe_divide(numerator, denominator):
+    """Return None for Pine-style na when a ratio cannot be calculated."""
+    if denominator == 0:
+        return None
+    return numerator / denominator
+
+def calculate_weighted_simple_average_series(src_values, length, weight):
+    """Pine Script calculate_weighted_simple_average() as a full series."""
     if not src_values or length <= 0:
-        return 0
+        return []
     
-    if len(src_values) == 1:
-        return src_values[0]
+    outputs = []
+    sum_values = []
     
-    # Pine Script狀態變量
-    sum_float = 0.0
-    output = None
-    
-    # 逐步計算，維護Pine Script的狀態邏輯
     for i, src in enumerate(src_values):
-        # Pine Script邏輯：sum_float := nz(sum_float[1]) - nz(src[length]) + src
-        if i >= length:
-            # 移除length期前的值，加入當前值
-            sum_float = sum_float - src_values[i - length] + src
-        else:
-            # 累加當前值
-            sum_float += src
+        previous_sum = sum_values[i - 1] if i > 0 else None
+        aged_src = src_values[i - length] if i >= length else None
         
-        # 計算移動平均
-        if i >= length - 1:
-            moving_average = sum_float / length
+        if src is None:
+            sum_float = None
         else:
-            moving_average = None  # Pine Script中會是na
+            sum_float = pine_nz(previous_sum) - pine_nz(aged_src) + src
+        sum_values.append(sum_float)
         
-        # Pine Script邏輯：output := na(output[1]) ? moving_average : (src * weight + output[1] * (length - weight)) / length
-        if output is None:
-            # 第一次計算或moving_average為None時
-            output = moving_average if moving_average is not None else src
+        moving_average = None if aged_src is None or sum_float is None else sum_float / length
+        previous_output = outputs[i - 1] if i > 0 else None
+        
+        if previous_output is None:
+            output = moving_average
+        elif src is None:
+            output = None
         else:
-            if moving_average is not None:
-                # 標準的加權計算
-                output = (src * weight + output * (length - weight)) / length
-            else:
-                # 如果moving_average為None，保持原值
-                output = (src * weight + output * (length - weight)) / length
+            output = (src * weight + previous_output * (length - weight)) / length
+        
+        outputs.append(output)
     
-    return output if output is not None else (src_values[-1] if src_values else 0)
+    return outputs
+
+def calculate_pine_ema_series(values, period):
+    """TradingView-like ta.ema() series, seeded from the first non-na value."""
+    if not values or period <= 0:
+        return []
+    
+    alpha = 2 / (period + 1)
+    outputs = []
+    previous = None
+    
+    for value in values:
+        if value is None:
+            outputs.append(previous)
+            continue
+        
+        ema = value if previous is None else (alpha * value + (1 - alpha) * previous)
+        outputs.append(ema)
+        previous = ema
+    
+    return outputs
+
+def format_optional_number(value):
+    return "na" if value is None else f"{value:.2f}"
 
 def calculate_pine_script_indicators(ohlc_data):
     """完全按照Pine Script邏輯計算技術指標"""
@@ -1531,64 +1554,23 @@ def calculate_pine_script_indicators(ohlc_data):
     # 計算典型價格 (2 * close + high + low + open) / 5
     typical_prices = [(2 * c + h + l + o) / 5 for c, h, l, o in zip(closes, highs, lows, opens)]
     
-    # 計算資金流向趨勢（完全按照Pine Script公式）
-    fund_flow_values = []
-    
+    relative_positions_27 = []
     for i in range(len(closes)):
-        # 計算27期最高最低價
         start_idx = max(0, i - 26)
         lowest_27 = min(lows[start_idx:i+1])
         highest_27 = max(highs[start_idx:i+1])
-        
-        if highest_27 != lowest_27:
-            # 計算相對位置
-            relative_pos = (closes[i] - lowest_27) / (highest_27 - lowest_27) * 100
-            
-            # 收集足夠的相對位置數據用於加權平均
-            relative_positions = []
-            for j in range(max(0, i - 4), i + 1):
-                start_j = max(0, j - 26)
-                low_27_j = min(lows[start_j:j+1])
-                high_27_j = max(highs[start_j:j+1])
-                if high_27_j != low_27_j:
-                    rel_pos_j = (closes[j] - low_27_j) / (high_27_j - low_27_j) * 100
-                else:
-                    rel_pos_j = 50
-                relative_positions.append(rel_pos_j)
-            
-            # 第一層加權簡單平均（5期，權重1）
-            wsa1 = calculate_weighted_simple_average(relative_positions, min(5, len(relative_positions)), 1)
-            
-            # 第二層加權簡單平均（3期，權重1）
-            if i >= 2:
-                # 收集前面的wsa1值
-                wsa1_values = []
-                for k in range(max(0, i - 2), i + 1):
-                    # 重新計算每個時點的wsa1
-                    rel_pos_k = []
-                    for j in range(max(0, k - 4), k + 1):
-                        start_j = max(0, j - 26)
-                        low_27_j = min(lows[start_j:j+1])
-                        high_27_j = max(highs[start_j:j+1])
-                        if high_27_j != low_27_j:
-                            rel_pos_j = (closes[j] - low_27_j) / (high_27_j - low_27_j) * 100
-                        else:
-                            rel_pos_j = 50
-                        rel_pos_k.append(rel_pos_j)
-                    
-                    wsa1_k = calculate_weighted_simple_average(rel_pos_k, min(5, len(rel_pos_k)), 1)
-                    wsa1_values.append(wsa1_k)
-                
-                wsa2 = calculate_weighted_simple_average(wsa1_values, min(3, len(wsa1_values)), 1)
-            else:
-                wsa2 = wsa1
-            
-            # 最終公式：(3 * wsa1 - 2 * wsa2 - 50) * 1.032 + 50
-            fund_flow = (3 * wsa1 - 2 * wsa2 - 50) * 1.032 + 50
+        relative_position = safe_divide(closes[i] - lowest_27, highest_27 - lowest_27)
+        relative_positions_27.append(None if relative_position is None else relative_position * 100)
+    
+    wsa1_values = calculate_weighted_simple_average_series(relative_positions_27, 5, 1)
+    wsa2_values = calculate_weighted_simple_average_series(wsa1_values, 3, 1)
+    
+    fund_flow_values = []
+    for wsa1, wsa2 in zip(wsa1_values, wsa2_values):
+        if wsa1 is None or wsa2 is None:
+            fund_flow_values.append(None)
         else:
-            fund_flow = 50
-        
-        fund_flow_values.append(max(0, min(100, fund_flow)))
+            fund_flow_values.append((3 * wsa1 - 2 * wsa2 - 50) * 1.032 + 50)
     
     # 計算多空線（13期EMA）
     # 先計算標準化的典型價格
@@ -1599,35 +1581,31 @@ def calculate_pine_script_indicators(ohlc_data):
         lowest_34 = min(lows[start_idx:i+1])
         highest_34 = max(highs[start_idx:i+1])
         
-        if highest_34 != lowest_34:
-            normalized_price = (typical_prices[i] - lowest_34) / (highest_34 - lowest_34) * 100
-        else:
-            normalized_price = 50
-        bull_bear_values.append(max(0, min(100, normalized_price)))
+        normalized_price = safe_divide(typical_prices[i] - lowest_34, highest_34 - lowest_34)
+        bull_bear_values.append(None if normalized_price is None else normalized_price * 100)
     
-    # 計算13期EMA
-    bull_bear_line_values = []
-    for i in range(len(bull_bear_values)):
-        if i < 13:
-            ema_value = sum(bull_bear_values[:i+1]) / (i+1)
-        else:
-            ema_value = calculate_ema(bull_bear_values[:i+1], 13)
-        bull_bear_line_values.append(ema_value)
+    bull_bear_line_values = calculate_pine_ema_series(bull_bear_values, 13)
     
     # 檢查當日和前一日的黃柱信號
     current_day_signal = False
     previous_day_signal = False
     
     if len(fund_flow_values) >= 2 and len(bull_bear_line_values) >= 2:
-        # 檢查當日黃柱
         current_fund = fund_flow_values[-1]
         previous_fund = fund_flow_values[-2]
         current_bull_bear = bull_bear_line_values[-1]
         previous_bull_bear = bull_bear_line_values[-2]
         
         # Pine Script crossover邏輯：ta.crossover(fund_flow_trend, bull_bear_line)
-        is_crossover_today = (current_fund > current_bull_bear) and (previous_fund <= previous_bull_bear)
-        is_oversold_today = current_bull_bear < 25
+        is_crossover_today = (
+            current_fund is not None and
+            current_bull_bear is not None and
+            previous_fund is not None and
+            previous_bull_bear is not None and
+            current_fund > current_bull_bear and
+            previous_fund <= previous_bull_bear
+        )
+        is_oversold_today = current_bull_bear is not None and current_bull_bear < 25
         current_day_signal = is_crossover_today and is_oversold_today
         
         # 檢查前一日黃柱
@@ -1637,28 +1615,35 @@ def calculate_pine_script_indicators(ohlc_data):
             prev_bull_bear = bull_bear_line_values[-2]
             prev_prev_bull_bear = bull_bear_line_values[-3]
             
-            is_crossover_yesterday = (prev_fund > prev_bull_bear) and (prev_prev_fund <= prev_prev_bull_bear)
-            is_oversold_yesterday = prev_bull_bear < 25
+            is_crossover_yesterday = (
+                prev_fund is not None and
+                prev_bull_bear is not None and
+                prev_prev_fund is not None and
+                prev_prev_bull_bear is not None and
+                prev_fund > prev_bull_bear and
+                prev_prev_fund <= prev_prev_bull_bear
+            )
+            is_oversold_yesterday = prev_bull_bear is not None and prev_bull_bear < 25
             previous_day_signal = is_crossover_yesterday and is_oversold_yesterday
         
-        # 黃柱信號：當日或前一日出現
-        banker_entry_signal = current_day_signal or previous_day_signal
+        # Pine Script的alertcondition只代表目前這根K棒，不納入前一日訊號。
+        banker_entry_signal = current_day_signal
         
         # 記錄詳細計算結果用於調試（僅記錄符合條件的股票）
         if banker_entry_signal:
             logger.info(f"🟡 發現黃柱信號:")
-            logger.info(f"  當日: 資金流向={current_fund:.2f}, 多空線={current_bull_bear:.2f}, crossover={is_crossover_today}, 超賣={is_oversold_today}, 黃柱={current_day_signal}")
+            logger.info(f"  當日: 資金流向={format_optional_number(current_fund)}, 多空線={format_optional_number(current_bull_bear)}, crossover={is_crossover_today}, 超賣={is_oversold_today}, 黃柱={current_day_signal}")
             if len(fund_flow_values) >= 3:
-                logger.info(f"  前日: 資金流向={prev_fund:.2f}, 多空線={prev_bull_bear:.2f}, crossover={is_crossover_yesterday}, 超賣={is_oversold_yesterday}, 黃柱={previous_day_signal}")
+                logger.info(f"  前日: 資金流向={format_optional_number(prev_fund)}, 多空線={format_optional_number(prev_bull_bear)}, crossover={is_crossover_yesterday}, 超賣={is_oversold_yesterday}, 黃柱={previous_day_signal}")
         
         return {
-            'fund_trend': current_fund,
-            'multi_short_line': current_bull_bear,
+            'fund_trend': current_fund if current_fund is not None else 0,
+            'multi_short_line': current_bull_bear if current_bull_bear is not None else 0,
             'banker_entry_signal': banker_entry_signal,
-            'is_crossover': (is_crossover_today if current_day_signal else is_crossover_yesterday),
-            'is_oversold': (is_oversold_today if current_day_signal else is_oversold_yesterday),
-            'fund_trend_previous': previous_fund if len(fund_flow_values) >= 2 else current_fund,
-            'multi_short_line_previous': previous_bull_bear if len(bull_bear_line_values) >= 2 else current_bull_bear
+            'is_crossover': is_crossover_today,
+            'is_oversold': is_oversold_today,
+            'fund_trend_previous': previous_fund if previous_fund is not None else (current_fund or 0),
+            'multi_short_line_previous': previous_bull_bear if previous_bull_bear is not None else (current_bull_bear or 0)
         }
     
     return None
@@ -2333,4 +2318,3 @@ if __name__ == '__main__':
     
     # 啟動Flask應用
     app.run(host='0.0.0.0', port=5000, debug=False)
-

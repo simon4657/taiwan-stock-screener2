@@ -10,8 +10,10 @@ Gunicorn配置文件 - 台股主力資金篩選器上市市場版本
 - 使用 threads 支援並行請求處理
 """
 
+import os
+
 # 服務器配置
-bind = "0.0.0.0:5000"
+bind = f"0.0.0.0:{os.environ.get('PORT', '5000')}"
 workers = 1  # 必須使用單一 worker，確保全域變數共享（stocks_data, update_status）
 worker_class = "gthread"  # 使用 gthread 支援多執行緒請求處理
 threads = 4  # 每個 worker 使用 4 個執行緒
