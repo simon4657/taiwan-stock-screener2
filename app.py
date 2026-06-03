@@ -26,6 +26,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+DEPLOY_VERSION = "pine-signal-alignment-2026-06-03"
 
 # 全域變數
 stocks_data = {}
@@ -1853,11 +1854,21 @@ def health_check():
             'data_date': data_date,
             'last_update': last_update_str,
             'market': 'TWSE',  # 標記為上市市場
-            'version': '5.0 - TWSE Market Edition (Yahoo Finance)'
+            'version': '5.0 - TWSE Market Edition (Yahoo Finance)',
+            'deploy_version': DEPLOY_VERSION
         })
     except Exception as e:
         logger.error(f"健康檢查失敗: {str(e)}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/version')
+def version_check():
+    """部署版本檢查API"""
+    return jsonify({
+        'version': '5.0 - TWSE Market Edition (Yahoo Finance)',
+        'deploy_version': DEPLOY_VERSION,
+        'market': 'TWSE'
+    })
 
 @app.route('/api/update', methods=['POST'])
 def update_data():
