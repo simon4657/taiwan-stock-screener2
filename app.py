@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-DEPLOY_VERSION = "faster-yahoo-fallback-2026-06-03"
+DEPLOY_VERSION = "stable-honest-update-2026-06-03"
 
 # 全域變數
 stocks_data = {}
@@ -1274,7 +1274,8 @@ YAHOO_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
 YAHOO_CHART_HOSTS = ('query1.finance.yahoo.com', 'query2.finance.yahoo.com')
-YAHOO_FALLBACK_WORKERS = 60
+YAHOO_FALLBACK_WORKERS = 30
+YAHOO_FALLBACK_BATCH_SIZE = 120
 
 def yahoo_timestamp_to_date(timestamp_value):
     return datetime.fromtimestamp(timestamp_value, tz=TW_TZ).strftime('%Y-%m-%d')
@@ -1481,20 +1482,23 @@ def fetch_otc_stock_data():
         seen_codes = set()
         
         update_status['message'] = f'正在使用 Yahoo Finance 下載 {len(codes)} 支上市股票資料...'
-        with ThreadPoolExecutor(max_workers=YAHOO_FALLBACK_WORKERS) as executor:
-            futures = {executor.submit(fetch_single_stock_yahoo, code): code for code in codes}
-            for future in as_completed(futures):
-                code = futures[future]
-                result = future.result()
-                if result:
-                    if result['code'] in stock_list:
-                        result['name'] = stock_list[result['code']]
-                    all_results.append(result)
-                    seen_codes.add(result['code'])
-                else:
-                    failed_count += 1
-                update_status['progress'] = min(len(seen_codes) + failed_count, len(codes))
-                update_status['message'] = f"已處理 {update_status['progress']}/{len(codes)} 支上市股票資料..."
+        for i in range(0, len(codes), YAHOO_FALLBACK_BATCH_SIZE):
+            batch_codes = codes[i:i + YAHOO_FALLBACK_BATCH_SIZE]
+            update_status['message'] = f'正在處理第 {i // YAHOO_FALLBACK_BATCH_SIZE + 1} 批 Yahoo Finance 資料...'
+            with ThreadPoolExecutor(max_workers=YAHOO_FALLBACK_WORKERS) as executor:
+                futures = {executor.submit(fetch_single_stock_yahoo, code): code for code in batch_codes}
+                for future in as_completed(futures):
+                    code = futures[future]
+                    result = future.result()
+                    if result:
+                        if result['code'] in stock_list:
+                            result['name'] = stock_list[result['code']]
+                        all_results.append(result)
+                        seen_codes.add(result['code'])
+                    else:
+                        failed_count += 1
+                    update_status['progress'] = min(len(seen_codes) + failed_count, len(codes))
+                    update_status['message'] = f"已處理 {update_status['progress']}/{len(codes)} 支上市股票資料..."
         
         if update_status['progress'] < len(codes):
             update_status['progress'] = len(codes)
