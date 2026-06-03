@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-DEPLOY_VERSION = "pine-signal-alignment-2026-06-03"
+DEPLOY_VERSION = "fast-honest-stock-update-2026-06-03"
 
 # 全域變數
 stocks_data = {}
@@ -1270,14 +1270,86 @@ def discover_twse_stocks_via_yahoo():
     logger.info(f"透過 Yahoo Finance 探測到 {len(valid_stocks)} 支上市股票")
     return valid_stocks
 
-def fetch_single_stock_yahoo(code):
+YAHOO_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+}
+
+def yahoo_timestamp_to_date(timestamp_value):
+    return datetime.fromtimestamp(timestamp_value, tz=TW_TZ).strftime('%Y-%m-%d')
+
+def parse_market_number(value, default=0):
+    if value is None:
+        return default
+    try:
+        text = str(value).replace(',', '').replace('+', '').strip()
+        if text in ('', '--', 'X', '除權息'):
+            return default
+        return float(text)
+    except (ValueError, TypeError):
+        return default
+
+def fetch_twse_daily_all_data(stock_list):
+    """從 TWSE 單次取得上市股票日資料；若海外環境被擋則回傳 None."""
+    url = 'https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL'
+    try:
+        response = requests.get(url, headers=YAHOO_HEADERS, timeout=12, verify=False)
+        content_type = response.headers.get('Content-Type', '')
+        if response.status_code != 200 or 'text/html' in content_type:
+            logger.warning(f"TWSE 全市場資料不可用，HTTP {response.status_code}, content-type={content_type}")
+            return None
+        
+        raw_json = response.json()
+        if not isinstance(raw_json, list):
+            return None
+        
+        results = []
+        trade_date = get_taiwan_time().strftime('%Y-%m-%d')
+        for item in raw_json:
+            code = str(item.get('Code', '')).strip()
+            name = str(item.get('Name', '')).strip()
+            if code not in stock_list:
+                continue
+            if not is_valid_otc_stock(code, name or stock_list.get(code, '')):
+                continue
+            
+            close_price = parse_market_number(item.get('ClosingPrice'))
+            volume_shares = parse_market_number(item.get('TradeVolume'))
+            if close_price <= 0 or volume_shares <= 0:
+                continue
+            
+            open_price = parse_market_number(item.get('OpeningPrice'), close_price) or close_price
+            high_price = parse_market_number(item.get('HighestPrice'), close_price) or close_price
+            low_price = parse_market_number(item.get('LowestPrice'), close_price) or close_price
+            change = parse_market_number(item.get('Change'), 0)
+            previous_close = close_price - change
+            change_pct = (change / previous_close * 100) if previous_close else 0
+            
+            results.append({
+                'code': code,
+                'name': stock_list.get(code) or name,
+                'close': float(close_price),
+                'open': float(open_price),
+                'high': float(high_price),
+                'low': float(low_price),
+                'volume': int(volume_shares),
+                'change': float(change),
+                'change_percent': float(change_pct),
+                'date': trade_date,
+                'market': 'TWSE'
+            })
+        
+        logger.info(f"從 TWSE 全市場資料取得 {len(results)} 支上市股票")
+        return results if results else None
+    except Exception as e:
+        logger.warning(f"TWSE 全市場資料取得失敗: {e}")
+        return None
+
+def fetch_single_stock_yahoo(code, session=None):
     """從 Yahoo Finance v8 chart API 取得單支上市股票的即時資料"""
     try:
         url = f'https://query1.finance.yahoo.com/v8/finance/chart/{code}.TW?interval=1d&range=2d'
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        r = requests.get(url, headers=headers, timeout=10, verify=False)
+        http = session or requests
+        r = http.get(url, headers=YAHOO_HEADERS, timeout=10, verify=False)
         if r.status_code != 200:
             return None
         
@@ -1313,7 +1385,7 @@ def fetch_single_stock_yahoo(code):
         change_pct = (change / prev_close * 100) if prev_close != 0 else 0
         
         # 取得交易日期（使用台灣時區）
-        trade_date = datetime.fromtimestamp(timestamps[idx], tz=TW_TZ).strftime('%Y-%m-%d')
+        trade_date = yahoo_timestamp_to_date(timestamps[idx])
         
         # 取得股票名稱
         stock_name = meta.get('shortName', '') or meta.get('longName', '')
@@ -1338,12 +1410,12 @@ def fetch_otc_stock_data():
     """獲取上市股票資料（使用 Yahoo Finance API）
     
     由於 TWSE API 封鎖海外伺服器 IP（如 Render），
-    改用 Yahoo Finance v8 chart API 搭配並行請求取得所有上市股票資料。
+    優先使用 TWSE 全市場日資料；不可用時回退 Yahoo Finance chart API。
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
     
     try:
-        logger.info("開始獲取上市股票資料（Yahoo Finance API）...")
+        logger.info("開始獲取上市股票資料（TWSE 優先，Yahoo Finance 備援）...")
         
         # 取得上市股票代碼清單
         stock_list = get_twse_stock_codes()
@@ -1354,34 +1426,48 @@ def fetch_otc_stock_data():
         codes = list(stock_list.keys())
         logger.info(f"準備下載 {len(codes)} 支上市股票資料...")
         
-        # 使用並行請求批次下載
-        all_results = []
-        failed_count = 0
-        
         update_status['total'] = len(codes)
         update_status['progress'] = 0
-        update_status['message'] = f'正在下載 {len(codes)} 支上市股票資料...'
+        update_status['message'] = f'正在嘗試從 TWSE 單次下載 {len(codes)} 支上市股票資料...'
         
-        with ThreadPoolExecutor(max_workers=20) as executor:
+        twse_results = fetch_twse_daily_all_data(stock_list)
+        if twse_results:
+            update_status['total'] = len(twse_results)
+            update_status['progress'] = len(twse_results)
+            update_status['message'] = f'完成下載：從 TWSE 取得 {len(twse_results)} 支上市股票資料'
+            return twse_results
+        
+        # TWSE 不可用時，使用 Yahoo chart API 並行下載。
+        all_results = []
+        failed_count = 0
+        seen_codes = set()
+        
+        update_status['message'] = f'正在使用 Yahoo Finance 下載 {len(codes)} 支上市股票資料...'
+        with ThreadPoolExecutor(max_workers=30) as executor:
             futures = {executor.submit(fetch_single_stock_yahoo, code): code for code in codes}
             for future in as_completed(futures):
+                code = futures[future]
                 result = future.result()
                 if result:
-                    # 優先使用 TWSE 清單中的中文簡稱，Yahoo Finance 回傳的是英文名稱
                     if result['code'] in stock_list:
                         result['name'] = stock_list[result['code']]
                     all_results.append(result)
+                    seen_codes.add(result['code'])
                 else:
                     failed_count += 1
-                
-                # 更新進度
-                update_status['progress'] = len(all_results) + failed_count
+                update_status['progress'] = min(len(seen_codes) + failed_count, len(codes))
+                update_status['message'] = f"已處理 {update_status['progress']}/{len(codes)} 支上市股票資料..."
         
+        if update_status['progress'] < len(codes):
+            update_status['progress'] = len(codes)
+
         if not all_results:
             logger.error("Yahoo Finance API 無法取得任何股票資料")
             return None
         
-        logger.info(f"成功從 Yahoo Finance 取得 {len(all_results)} 支上市股票資料（失敗 {failed_count} 支）")
+        final_failed_count = len(codes) - len(seen_codes)
+        logger.info(f"成功從 Yahoo Finance 取得 {len(all_results)} 支上市股票資料（未取得 {final_failed_count} 支）")
+        update_status['message'] = f'完成下載：取得 {len(all_results)} 支，未取得 {final_failed_count} 支'
         return all_results
         
     except Exception as e:
@@ -1749,7 +1835,7 @@ def diagnose():
     import socket
     result = {
         'timestamp': get_taiwan_time().strftime('%Y-%m-%d %H:%M:%S'),
-        'data_source': 'Yahoo Finance v8 chart API',
+        'data_source': 'TWSE daily all API with Yahoo Finance chart fallback',
         'tests': {}
     }
     

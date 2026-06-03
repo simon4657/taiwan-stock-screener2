@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="app-version" content="pine-signal-alignment-2026-06-03">
+    <meta name="app-version" content="fast-honest-stock-update-2026-06-03">
     <title>台股主力資金進入篩選器（上市市場）</title>
     <style>
         * {
@@ -642,7 +642,7 @@
                     const updateBtn = document.getElementById('updateBtn');
                     updateBtn.disabled = true;
                     const prog = updateStatusData.progress || 0;
-                    const tot = updateStatusData.total || 1068;
+                    const tot = updateStatusData.total || 0;
                     showProgress(prog, tot, updateStatusData.message);
                     updateBtn.textContent = `更新中 ${prog}/${tot}`;
                     showStatus('偵測到股票資料更新正在進行中，請稍候...', 'info');
@@ -656,7 +656,7 @@
                             const s = await sRes.json();
                             if (s.is_running) {
                                 const p = s.progress || 0;
-                                const t = s.total || 1068;
+                                const t = s.total || 0;
                                 showProgress(p, t, s.message);
                                 updateBtn.textContent = `更新中 ${p}/${t}`;
                                 pollCount++;
@@ -783,7 +783,9 @@
             const pct = total > 0 ? Math.round((progress / total) * 100) : 0;
             bar.style.width = pct + '%';
             percent.textContent = pct + '%';
-            count.textContent = `${progress.toLocaleString()} / ${total.toLocaleString()} 支`;
+            count.textContent = total > 0
+                ? `${progress.toLocaleString()} / ${total.toLocaleString()} 支`
+                : `${progress.toLocaleString()} 支`;
             label.textContent = message || '正在下載上市股票資料...';
 
             // 預估剩餘時間（每支約 0.3 秒）
@@ -842,7 +844,7 @@
 
             try {
                 showStatus('正在啟動股票資料更新...', 'info');
-                showProgress(0, 1068, '正在連線並取得股票清單...');
+                showProgress(0, 0, '正在連線並取得股票清單...');
 
                 // 發送更新請求（立即回應，後台執行）
                 const response = await fetch('/api/update', {
@@ -874,7 +876,7 @@
                         if (status.is_running) {
                             // 更新進度條
                             const prog = status.progress || 0;
-                            const tot = status.total || 1068;
+                            const tot = status.total || 0;
                             showProgress(prog, tot, status.message);
                             updateBtn.textContent = `更新中 ${prog}/${tot}`;
 
@@ -969,7 +971,7 @@
                 const data = await response.json();
 
                 if (data.success) {
-                    displayResults(data.yellow_candle_stocks, data.query_time, data.data_date);
+                    displayResults(data.yellow_candle_stocks, data.query_time, data.data_date, data.total_analyzed);
                     showStatus(`篩選完成：共分析 ${data.total_analyzed} 支上市股票，發現 ${data.yellow_candle_count} 支黃柱信號股票`, 'success');
                 } else {
                     showStatus(`篩選失敗: ${data.message}`, 'error');
@@ -987,7 +989,7 @@
         }
 
         // 顯示篩選結果
-        function displayResults(stocks, queryTime, dataDate) {
+        function displayResults(stocks, queryTime, dataDate, totalAnalyzed = 0) {
             document.getElementById('loading').style.display = 'none';
 
             // 調試：在控制台顯示原始數據
@@ -997,7 +999,7 @@
 
             if (stocks && stocks.length > 0) {
                 // 顯示結果統計
-                document.getElementById('totalAnalyzed').textContent = '800+';
+                document.getElementById('totalAnalyzed').textContent = Number(totalAnalyzed || 0).toLocaleString();
                 document.getElementById('yellowCandleCount').textContent = stocks.length;
 
                 // 調試：顯示第一支股票的詳細數據
