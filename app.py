@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-DEPLOY_VERSION = "multi-twse-fast-update-2026-06-03"
+DEPLOY_VERSION = "faster-yahoo-fallback-2026-06-03"
 
 # 全域變數
 stocks_data = {}
@@ -1273,6 +1273,8 @@ def discover_twse_stocks_via_yahoo():
 YAHOO_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
+YAHOO_CHART_HOSTS = ('query1.finance.yahoo.com', 'query2.finance.yahoo.com')
+YAHOO_FALLBACK_WORKERS = 60
 
 def yahoo_timestamp_to_date(timestamp_value):
     return datetime.fromtimestamp(timestamp_value, tz=TW_TZ).strftime('%Y-%m-%d')
@@ -1382,9 +1384,10 @@ def fetch_twse_daily_all_data(stock_list):
 def fetch_single_stock_yahoo(code, session=None):
     """從 Yahoo Finance v8 chart API 取得單支上市股票的即時資料"""
     try:
-        url = f'https://query1.finance.yahoo.com/v8/finance/chart/{code}.TW?interval=1d&range=2d'
+        host = YAHOO_CHART_HOSTS[int(code) % len(YAHOO_CHART_HOSTS)]
+        url = f'https://{host}/v8/finance/chart/{code}.TW?interval=1d&range=2d'
         http = session or requests
-        r = http.get(url, headers=YAHOO_HEADERS, timeout=10, verify=False)
+        r = http.get(url, headers=YAHOO_HEADERS, timeout=8, verify=False)
         if r.status_code != 200:
             return None
         
@@ -1478,7 +1481,7 @@ def fetch_otc_stock_data():
         seen_codes = set()
         
         update_status['message'] = f'正在使用 Yahoo Finance 下載 {len(codes)} 支上市股票資料...'
-        with ThreadPoolExecutor(max_workers=30) as executor:
+        with ThreadPoolExecutor(max_workers=YAHOO_FALLBACK_WORKERS) as executor:
             futures = {executor.submit(fetch_single_stock_yahoo, code): code for code in codes}
             for future in as_completed(futures):
                 code = futures[future]
