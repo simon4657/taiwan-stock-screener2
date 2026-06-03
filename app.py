@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-DEPLOY_VERSION = "stable-honest-update-2026-06-03"
+DEPLOY_VERSION = "recent-yellow-signal-2026-06-03"
 
 # 全域變數
 stocks_data = {}
@@ -1276,6 +1276,7 @@ YAHOO_HEADERS = {
 YAHOO_CHART_HOSTS = ('query1.finance.yahoo.com', 'query2.finance.yahoo.com')
 YAHOO_FALLBACK_WORKERS = 30
 YAHOO_FALLBACK_BATCH_SIZE = 120
+BANKER_SIGNAL_LOOKBACK_DAYS = 5
 
 def yahoo_timestamp_to_date(timestamp_value):
     return datetime.fromtimestamp(timestamp_value, tz=TW_TZ).strftime('%Y-%m-%d')
@@ -1715,55 +1716,52 @@ def calculate_pine_script_indicators(ohlc_data):
     
     bull_bear_line_values = calculate_pine_ema_series(bull_bear_values, 13)
     
-    # 檢查當日和前一日的黃柱信號
-    current_day_signal = False
-    previous_day_signal = False
-    
     if len(fund_flow_values) >= 2 and len(bull_bear_line_values) >= 2:
+        signal_points = []
+        for i in range(1, len(fund_flow_values)):
+            current_fund_at_bar = fund_flow_values[i]
+            previous_fund_at_bar = fund_flow_values[i - 1]
+            current_bull_bear_at_bar = bull_bear_line_values[i]
+            previous_bull_bear_at_bar = bull_bear_line_values[i - 1]
+            is_crossover_at_bar = (
+                current_fund_at_bar is not None and
+                current_bull_bear_at_bar is not None and
+                previous_fund_at_bar is not None and
+                previous_bull_bear_at_bar is not None and
+                current_fund_at_bar > current_bull_bear_at_bar and
+                previous_fund_at_bar <= previous_bull_bear_at_bar
+            )
+            is_oversold_at_bar = current_bull_bear_at_bar is not None and current_bull_bear_at_bar < 25
+            signal_points.append({
+                'index': i,
+                'is_crossover': is_crossover_at_bar,
+                'is_oversold': is_oversold_at_bar,
+                'banker_entry_signal': is_crossover_at_bar and is_oversold_at_bar,
+            })
+        
         current_fund = fund_flow_values[-1]
         previous_fund = fund_flow_values[-2]
         current_bull_bear = bull_bear_line_values[-1]
         previous_bull_bear = bull_bear_line_values[-2]
+        latest_signal = None
+        lookback_start = max(0, len(fund_flow_values) - BANKER_SIGNAL_LOOKBACK_DAYS)
+        for point in reversed(signal_points):
+            if point['index'] >= lookback_start and point['banker_entry_signal']:
+                latest_signal = point
+                break
         
-        # Pine Script crossover邏輯：ta.crossover(fund_flow_trend, bull_bear_line)
-        is_crossover_today = (
-            current_fund is not None and
-            current_bull_bear is not None and
-            previous_fund is not None and
-            previous_bull_bear is not None and
-            current_fund > current_bull_bear and
-            previous_fund <= previous_bull_bear
-        )
-        is_oversold_today = current_bull_bear is not None and current_bull_bear < 25
-        current_day_signal = is_crossover_today and is_oversold_today
-        
-        # 檢查前一日黃柱
-        if len(fund_flow_values) >= 3 and len(bull_bear_line_values) >= 3:
-            prev_fund = fund_flow_values[-2]
-            prev_prev_fund = fund_flow_values[-3]
-            prev_bull_bear = bull_bear_line_values[-2]
-            prev_prev_bull_bear = bull_bear_line_values[-3]
-            
-            is_crossover_yesterday = (
-                prev_fund is not None and
-                prev_bull_bear is not None and
-                prev_prev_fund is not None and
-                prev_prev_bull_bear is not None and
-                prev_fund > prev_bull_bear and
-                prev_prev_fund <= prev_prev_bull_bear
-            )
-            is_oversold_yesterday = prev_bull_bear is not None and prev_bull_bear < 25
-            previous_day_signal = is_crossover_yesterday and is_oversold_yesterday
-        
-        # Pine Script的alertcondition只代表目前這根K棒，不納入前一日訊號。
-        banker_entry_signal = current_day_signal
+        current_point = signal_points[-1]
+        is_crossover_today = current_point['is_crossover']
+        is_oversold_today = current_point['is_oversold']
+        current_day_signal = current_point['banker_entry_signal']
+        banker_entry_signal = latest_signal is not None
+        signal_offset_days = len(fund_flow_values) - 1 - latest_signal['index'] if latest_signal else None
         
         # 記錄詳細計算結果用於調試（僅記錄符合條件的股票）
         if banker_entry_signal:
             logger.info(f"🟡 發現黃柱信號:")
             logger.info(f"  當日: 資金流向={format_optional_number(current_fund)}, 多空線={format_optional_number(current_bull_bear)}, crossover={is_crossover_today}, 超賣={is_oversold_today}, 黃柱={current_day_signal}")
-            if len(fund_flow_values) >= 3:
-                logger.info(f"  前日: 資金流向={format_optional_number(prev_fund)}, 多空線={format_optional_number(prev_bull_bear)}, crossover={is_crossover_yesterday}, 超賣={is_oversold_yesterday}, 黃柱={previous_day_signal}")
+            logger.info(f"  最近黃柱距今 {signal_offset_days} 個交易日")
         
         return {
             'fund_trend': current_fund if current_fund is not None else 0,
@@ -1771,6 +1769,9 @@ def calculate_pine_script_indicators(ohlc_data):
             'banker_entry_signal': banker_entry_signal,
             'is_crossover': is_crossover_today,
             'is_oversold': is_oversold_today,
+            'current_day_signal': current_day_signal,
+            'signal_offset_days': signal_offset_days,
+            'signal_lookback_days': BANKER_SIGNAL_LOOKBACK_DAYS,
             'fund_trend_previous': previous_fund if previous_fund is not None else (current_fund or 0),
             'multi_short_line_previous': previous_bull_bear if previous_bull_bear is not None else (current_bull_bear or 0)
         }
@@ -2259,13 +2260,20 @@ def get_stock_web_data(stock_code, stock_name=None):
                 banker_entry_signal = result['banker_entry_signal']
                 is_crossover = result['is_crossover']
                 is_oversold = result['is_oversold']
+                current_day_signal = result.get('current_day_signal', False)
+                signal_offset_days = result.get('signal_offset_days')
                 fund_trend_previous = result['fund_trend_previous']
                 multi_short_line_previous = result['multi_short_line_previous']
             
             if fund_flow_trend is not None:
                 # 根據嚴格的Pine Script條件判斷狀態
                 if banker_entry_signal:
-                    signal_status = "🟡 黃柱信號"
+                    if current_day_signal:
+                        signal_status = "🟡 今日黃柱信號"
+                    elif signal_offset_days == 1:
+                        signal_status = "🟡 昨日黃柱信號"
+                    else:
+                        signal_status = f"🟡 {signal_offset_days}日前黃柱信號"
                     score = 100
                 elif is_crossover and not is_oversold:
                     signal_status = "突破但非超賣"
@@ -2318,6 +2326,8 @@ def get_stock_web_data(stock_code, stock_name=None):
                     'date': data_date,  # 使用統一的資料日期顯示格式
                     'is_crossover': is_crossover,
                     'is_oversold': is_oversold,
+                    'current_day_signal': current_day_signal,
+                    'signal_offset_days': signal_offset_days,
                     'banker_entry_signal': banker_entry_signal
                 }
         
