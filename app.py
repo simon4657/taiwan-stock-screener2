@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-DEPLOY_VERSION = "fast-honest-stock-update-2026-06-03"
+DEPLOY_VERSION = "multi-twse-fast-update-2026-06-03"
 
 # 全域變數
 stocks_data = {}
@@ -1288,58 +1288,93 @@ def parse_market_number(value, default=0):
     except (ValueError, TypeError):
         return default
 
-def fetch_twse_daily_all_data(stock_list):
-    """從 TWSE 單次取得上市股票日資料；若海外環境被擋則回傳 None."""
-    url = 'https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL'
-    try:
-        response = requests.get(url, headers=YAHOO_HEADERS, timeout=12, verify=False)
-        content_type = response.headers.get('Content-Type', '')
-        if response.status_code != 200 or 'text/html' in content_type:
-            logger.warning(f"TWSE 全市場資料不可用，HTTP {response.status_code}, content-type={content_type}")
-            return None
+def build_stock_row(code, name, close_price, open_price, high_price, low_price, volume_shares, change, trade_date, stock_list):
+    if code not in stock_list:
+        return None
+    if not is_valid_otc_stock(code, name or stock_list.get(code, '')):
+        return None
+    if close_price <= 0 or volume_shares <= 0:
+        return None
+    
+    previous_close = close_price - change
+    change_pct = (change / previous_close * 100) if previous_close else 0
+    return {
+        'code': code,
+        'name': stock_list.get(code) or name,
+        'close': float(close_price),
+        'open': float(open_price or close_price),
+        'high': float(high_price or close_price),
+        'low': float(low_price or close_price),
+        'volume': int(volume_shares),
+        'change': float(change),
+        'change_percent': float(change_pct),
+        'date': trade_date,
+        'market': 'TWSE'
+    }
+
+def parse_twse_daily_payload(raw_json, stock_list):
+    results = []
+    trade_date = get_taiwan_time().strftime('%Y-%m-%d')
+    
+    if isinstance(raw_json, dict):
+        rows = raw_json.get('data', [])
+        if raw_json.get('date') and len(str(raw_json['date'])) == 8:
+            date_text = str(raw_json['date'])
+            trade_date = f"{date_text[:4]}-{date_text[4:6]}-{date_text[6:8]}"
         
-        raw_json = response.json()
-        if not isinstance(raw_json, list):
-            return None
-        
-        results = []
-        trade_date = get_taiwan_time().strftime('%Y-%m-%d')
+        for row in rows:
+            if len(row) < 9:
+                continue
+            code = str(row[0]).strip()
+            name = str(row[1]).strip()
+            volume_shares = parse_market_number(row[2])
+            open_price = parse_market_number(row[4])
+            high_price = parse_market_number(row[5])
+            low_price = parse_market_number(row[6])
+            close_price = parse_market_number(row[7])
+            change = parse_market_number(row[8], 0)
+            stock_row = build_stock_row(code, name, close_price, open_price, high_price, low_price, volume_shares, change, trade_date, stock_list)
+            if stock_row:
+                results.append(stock_row)
+        return results
+    
+    if isinstance(raw_json, list):
         for item in raw_json:
             code = str(item.get('Code', '')).strip()
             name = str(item.get('Name', '')).strip()
-            if code not in stock_list:
-                continue
-            if not is_valid_otc_stock(code, name or stock_list.get(code, '')):
-                continue
-            
             close_price = parse_market_number(item.get('ClosingPrice'))
             volume_shares = parse_market_number(item.get('TradeVolume'))
-            if close_price <= 0 or volume_shares <= 0:
-                continue
-            
             open_price = parse_market_number(item.get('OpeningPrice'), close_price) or close_price
             high_price = parse_market_number(item.get('HighestPrice'), close_price) or close_price
             low_price = parse_market_number(item.get('LowestPrice'), close_price) or close_price
             change = parse_market_number(item.get('Change'), 0)
-            previous_close = close_price - change
-            change_pct = (change / previous_close * 100) if previous_close else 0
+            stock_row = build_stock_row(code, name, close_price, open_price, high_price, low_price, volume_shares, change, trade_date, stock_list)
+            if stock_row:
+                results.append(stock_row)
+        return results
+    
+    return results
+
+def fetch_twse_daily_all_data(stock_list):
+    """從 TWSE 單次取得上市股票日資料；若海外環境被擋則回傳 None."""
+    urls = [
+        'https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL',
+        'https://www.twse.com.tw/exchangeReport/STOCK_DAY_ALL?response=json',
+        'https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY_ALL?response=json',
+    ]
+    try:
+        for url in urls:
+            response = requests.get(url, headers=YAHOO_HEADERS, timeout=12, verify=False)
+            content_type = response.headers.get('Content-Type', '')
+            if response.status_code != 200 or 'text/html' in content_type:
+                logger.warning(f"TWSE 全市場資料不可用，HTTP {response.status_code}, content-type={content_type}, url={url}")
+                continue
             
-            results.append({
-                'code': code,
-                'name': stock_list.get(code) or name,
-                'close': float(close_price),
-                'open': float(open_price),
-                'high': float(high_price),
-                'low': float(low_price),
-                'volume': int(volume_shares),
-                'change': float(change),
-                'change_percent': float(change_pct),
-                'date': trade_date,
-                'market': 'TWSE'
-            })
-        
-        logger.info(f"從 TWSE 全市場資料取得 {len(results)} 支上市股票")
-        return results if results else None
+            results = parse_twse_daily_payload(response.json(), stock_list)
+            if results:
+                logger.info(f"從 TWSE 全市場資料取得 {len(results)} 支上市股票，url={url}")
+                return results
+        return None
     except Exception as e:
         logger.warning(f"TWSE 全市場資料取得失敗: {e}")
         return None
