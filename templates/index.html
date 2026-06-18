@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="app-version" content="realtime-progress-screener-2026-06-18">
-    <title>台股主力資金進入篩選器（上市市場）</title>
+    <meta name="app-version" content="strategy-names-2026-06-18">
+    <title>台股策略篩選器（上市市場）</title>
     <style>
         * {
             margin: 0;
@@ -546,8 +546,8 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>台股主力資金進入篩選器（上市市場）</h1>
-            <p class="subtitle">使用Pine Script技術分析，專門篩選上市市場主力資金進場信號</p>
+            <h1>台股策略篩選器（上市市場）</h1>
+            <p class="subtitle">主力資金進場策略與強勢量價突破策略，分別篩選黃柱訊號與即時強勢標的</p>
             
             <div class="status-info">
                 <div class="status-item">
@@ -562,14 +562,14 @@
         </div>
 
         <div class="real-data-notice">
-            ✅ 本系統使用台灣證券交易所真實上市市場資料，提供準確的Pine Script技術分析結果
+            本系統使用台灣證券交易所真實上市市場資料，提供主力資金進場與強勢量價突破篩選結果
         </div>
 
         <div class="content">
             <div class="controls">
                 <button id="updateBtn" class="btn btn-primary">更新股票資料</button>
-                <button id="screenBtn" class="btn btn-secondary">開始篩選</button>
-                <a href="/realtime" class="btn btn-primary">即時條件篩選</a>
+                <button id="screenBtn" class="btn btn-secondary">主力資金進場策略</button>
+                <a href="/realtime" class="btn btn-primary">強勢量價突破策略</a>
             </div>
 
             <div id="statusMessage" class="status-message"></div>
@@ -599,7 +599,7 @@
                         </div>
                         <div class="stat-item">
                             <div class="number" id="yellowCandleCount">0</div>
-                            <div class="label">黃柱信號股票</div>
+                            <div class="label">主力進場黃柱</div>
                         </div>
                     </div>
                 </div>
@@ -608,7 +608,7 @@
             </div>
 
             <div id="noResults" class="no-results" style="display: none;">
-                <h3>目前沒有股票符合Pine Script主力進場條件</h3>
+                <h3>目前沒有股票符合主力資金進場策略</h3>
                 <p>這表示當前上市市場中沒有股票同時滿足以下條件：</p>
                 <ul>
                     <li>資金流向突破多空線（crossover）</li>

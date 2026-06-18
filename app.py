@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-DEPLOY_VERSION = "realtime-progress-screener-2026-06-18"
+DEPLOY_VERSION = "strategy-names-2026-06-18"
 
 # 全域變數
 stocks_data = {}
