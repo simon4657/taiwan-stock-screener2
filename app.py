@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-DEPLOY_VERSION = "recent-yellow-signal-2026-06-03"
+DEPLOY_VERSION = "realtime-rule-screener-2026-06-18"
 
 # 全域變數
 stocks_data = {}
@@ -45,6 +45,9 @@ update_status = {
     'finished_at': None
 }
 update_lock = threading.Lock()
+
+issued_shares_cache = None
+issued_shares_cache_time = None
 
 # 台灣時區
 TW_TZ = pytz.timezone('Asia/Taipei')
@@ -1871,6 +1874,11 @@ def index():
     """首頁"""
     return render_template('index.html')
 
+@app.route('/realtime')
+def realtime_screener_page():
+    """即時條件篩選頁"""
+    return render_template('realtime_screener.html')
+
 @app.route('/api/diagnose')
 def diagnose():
     """診斷端點：測試 Yahoo Finance API 和 TWSE API 的連線狀況"""
@@ -2086,6 +2094,84 @@ def get_stocks():
         logger.error(f"獲取股票清單失敗: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/realtime_screen', methods=['POST'])
+def realtime_screen():
+    """依附件規則進行即時條件篩選。"""
+    try:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        payload = request.get_json(silent=True) or {}
+        requested_codes = payload.get('stock_codes') or []
+        limit = payload.get('limit')
+        
+        stock_list = get_twse_stock_codes()
+        issued_shares = get_issued_shares_map()
+        
+        if requested_codes:
+            stock_codes = [str(code).strip() for code in requested_codes if str(code).strip() in stock_list]
+        else:
+            stock_codes = list(stock_list.keys())
+        
+        if isinstance(limit, int) and limit > 0:
+            stock_codes = stock_codes[:limit]
+        
+        started_at = get_taiwan_time()
+        results = []
+        matched = []
+        errors = []
+        skipped_missing_shares = 0
+        
+        def analyze_one(code):
+            shares = issued_shares.get(code)
+            if not shares:
+                return {'code': code, 'missing_shares': True}
+            return evaluate_realtime_rule(code, stock_list.get(code, code), shares)
+        
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            futures = {executor.submit(analyze_one, code): code for code in stock_codes}
+            for future in as_completed(futures):
+                code = futures[future]
+                try:
+                    result = future.result()
+                    if not result:
+                        errors.append({'code': code, 'reason': 'no_realtime_or_history_data'})
+                        continue
+                    if result.get('missing_shares'):
+                        skipped_missing_shares += 1
+                        continue
+                    results.append(result)
+                    if result.get('matched'):
+                        matched.append(result)
+                except Exception as e:
+                    errors.append({'code': code, 'reason': str(e)})
+        
+        matched.sort(key=lambda item: (item['turnover_rate'] or 0, item['volume_ratio'], item['change_percent']), reverse=True)
+        results.sort(key=lambda item: (item['matched'], item['turnover_rate'] or 0, item['volume_ratio']), reverse=True)
+        
+        return jsonify({
+            'success': True,
+            'rules': {
+                'turnover_rate_gt': 10,
+                'volume_ratio_gt': 5,
+                'above_ma': [5, 10, 20],
+                'change_percent_gt': 3,
+            },
+            'matched_stocks': matched,
+            'all_results': results,
+            'total_requested': len(stock_codes),
+            'total_analyzed': len(results),
+            'matched_count': len(matched),
+            'skipped_missing_shares': skipped_missing_shares,
+            'error_count': len(errors),
+            'errors': errors[:30],
+            'query_time': started_at.isoformat(),
+            'elapsed_seconds': round((get_taiwan_time() - started_at).total_seconds(), 2),
+            'market': 'TWSE',
+        })
+    except Exception as e:
+        logger.error(f"即時條件篩選失敗: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 def format_volume(volume):
     """格式化成交張數顯示（1張=1000股）"""
     # 將成交量（股）轉換為成交張數（張）
@@ -2222,6 +2308,105 @@ def fetch_historical_data_for_indicators(stock_code, days=60):
     logger.info(f"💡 建議：請檢查網路連接、股票代碼是否正確，或稍後重試")
     
     return None
+
+def get_issued_shares_map(force_refresh=False):
+    """取得上市公司已發行普通股數，用於計算 TURN 週轉率。"""
+    global issued_shares_cache, issued_shares_cache_time
+    
+    now = get_taiwan_time()
+    if (
+        not force_refresh and
+        issued_shares_cache and
+        issued_shares_cache_time and
+        (now - issued_shares_cache_time).total_seconds() < 24 * 3600
+    ):
+        return issued_shares_cache
+    
+    url = 'https://openapi.twse.com.tw/v1/opendata/t187ap03_L'
+    try:
+        response = requests.get(url, headers=YAHOO_HEADERS, timeout=20, verify=False)
+        if response.status_code != 200:
+            logger.warning(f"取得上市公司股數失敗，HTTP {response.status_code}")
+            return issued_shares_cache or {}
+        
+        raw_json = response.json()
+        shares_map = {}
+        for item in raw_json if isinstance(raw_json, list) else []:
+            code = str(item.get('公司代號', '')).strip()
+            shares = parse_market_number(item.get('已發行普通股數或TDR原股發行股數'))
+            if code and shares > 0:
+                shares_map[code] = int(shares)
+        
+        if shares_map:
+            issued_shares_cache = shares_map
+            issued_shares_cache_time = now
+            logger.info(f"取得 {len(shares_map)} 筆上市公司已發行股數")
+        return issued_shares_cache or {}
+    except Exception as e:
+        logger.warning(f"取得上市公司股數異常: {e}")
+        return issued_shares_cache or {}
+
+def simple_moving_average(values, length):
+    if len(values) < length:
+        return None
+    return sum(values[-length:]) / length
+
+def evaluate_realtime_rule(stock_code, stock_name, issued_shares):
+    """依附件條件篩選：TURN>10、量比>5、C>MA5/10/20、漲幅>3。"""
+    historical_data = fetch_historical_data_for_indicators(stock_code, days=60)
+    if not historical_data or len(historical_data) < 21:
+        return None
+    
+    latest = historical_data[-1]
+    previous = historical_data[-2] if len(historical_data) >= 2 else None
+    closes = [item['close'] for item in historical_data if item.get('close') is not None]
+    previous_volumes = [item.get('volume', 0) for item in historical_data[-6:-1]]
+    
+    current_price = latest['close']
+    current_volume = latest.get('volume', 0)
+    ma5 = simple_moving_average(closes, 5)
+    ma10 = simple_moving_average(closes, 10)
+    ma20 = simple_moving_average(closes, 20)
+    previous_close = previous['close'] if previous else current_price
+    change_percent = ((current_price / previous_close) - 1) * 100 if previous_close else 0
+    volume_ratio = calculate_volume_ratio(current_volume, previous_volumes)
+    turnover_rate = (current_volume / issued_shares * 100) if issued_shares else None
+    
+    cond_turnover = turnover_rate is not None and turnover_rate > 10
+    cond_volume_ratio = volume_ratio > 5
+    cond_ma = (
+        ma5 is not None and
+        ma10 is not None and
+        ma20 is not None and
+        current_price > ma5 and
+        current_price > ma10 and
+        current_price > ma20
+    )
+    cond_change = change_percent > 3
+    matched = cond_turnover and cond_volume_ratio and cond_ma and cond_change
+    
+    return {
+        'code': stock_code,
+        'name': stock_name,
+        'price': round(current_price, 2),
+        'date': latest.get('date'),
+        'volume': current_volume,
+        'volume_formatted': format_volume(current_volume),
+        'issued_shares': issued_shares,
+        'turnover_rate': round(turnover_rate, 2) if turnover_rate is not None else None,
+        'volume_ratio': round(volume_ratio, 2),
+        'change_percent': round(change_percent, 2),
+        'ma5': round(ma5, 2) if ma5 is not None else None,
+        'ma10': round(ma10, 2) if ma10 is not None else None,
+        'ma20': round(ma20, 2) if ma20 is not None else None,
+        'matched': matched,
+        'conditions': {
+            'turnover_gt_10': cond_turnover,
+            'volume_ratio_gt_5': cond_volume_ratio,
+            'above_ma5_ma10_ma20': cond_ma,
+            'change_gt_3': cond_change,
+        }
+    }
 
 def get_stock_web_data(stock_code, stock_name=None):
     """獲取單支股票的完整資料（包含技術指標）"""

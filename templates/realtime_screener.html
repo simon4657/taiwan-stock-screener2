@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="app-version" content="realtime-rule-screener-2026-06-18">
+    <title>即時強勢股條件篩選</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            min-height: 100vh;
+            font-family: "Microsoft JhengHei", "PingFang TC", Arial, sans-serif;
+            background: #f4f6f8;
+            color: #1f2937;
+            padding: 24px;
+        }
+        .shell { max-width: 1280px; margin: 0 auto; }
+        header {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            align-items: flex-start;
+            margin-bottom: 22px;
+        }
+        h1 { font-size: 28px; margin-bottom: 6px; }
+        .subtitle { color: #64748b; line-height: 1.6; }
+        .nav-link {
+            color: #2563eb;
+            text-decoration: none;
+            font-weight: 700;
+            white-space: nowrap;
+            margin-top: 6px;
+        }
+        .panel {
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 18px;
+            margin-bottom: 18px;
+        }
+        .rules {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+        }
+        .rule {
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            padding: 12px;
+            background: #fafafa;
+        }
+        .rule strong { display: block; margin-bottom: 4px; }
+        .rule span { color: #64748b; font-size: 14px; }
+        .controls {
+            display: grid;
+            grid-template-columns: 1fr 180px auto;
+            gap: 12px;
+            align-items: end;
+        }
+        label { display: block; font-weight: 700; margin-bottom: 6px; }
+        input {
+            width: 100%;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            padding: 11px 12px;
+            font-size: 15px;
+        }
+        button {
+            border: 0;
+            border-radius: 6px;
+            background: #0f172a;
+            color: white;
+            padding: 12px 18px;
+            font-size: 15px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        button:disabled { opacity: .55; cursor: not-allowed; }
+        .status { color: #475569; line-height: 1.6; }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 12px;
+        }
+        .stat {
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 14px;
+        }
+        .stat .value { font-size: 24px; font-weight: 800; }
+        .stat .label { color: #64748b; font-size: 13px; margin-top: 4px; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        th, td {
+            padding: 11px 10px;
+            border-bottom: 1px solid #e5e7eb;
+            text-align: right;
+            white-space: nowrap;
+            font-size: 14px;
+        }
+        th:first-child, td:first-child,
+        th:nth-child(2), td:nth-child(2) { text-align: left; }
+        th { background: #f8fafc; color: #334155; }
+        tr.match { background: #fff7ed; }
+        .ok { color: #15803d; font-weight: 800; }
+        .bad { color: #b91c1c; font-weight: 800; }
+        .empty {
+            padding: 30px;
+            text-align: center;
+            color: #64748b;
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+        }
+        .table-wrap { overflow-x: auto; }
+        @media (max-width: 820px) {
+            body { padding: 14px; }
+            header { display: block; }
+            .rules, .stats, .controls { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="shell">
+        <header>
+            <div>
+                <h1>即時強勢股條件篩選</h1>
+                <p class="subtitle">依附件規則：週轉率、量比、均線站上與漲幅四項條件同時成立才列為符合。</p>
+            </div>
+            <a class="nav-link" href="/">返回主力資金頁</a>
+        </header>
+
+        <section class="panel">
+            <div class="rules">
+                <div class="rule"><strong>TURN &gt; 10</strong><span>成交量 / 已發行普通股數 × 100</span></div>
+                <div class="rule"><strong>量比 &gt; 5</strong><span>今日量 / 前 5 日平均量</span></div>
+                <div class="rule"><strong>C &gt; MA5/10/20</strong><span>現價站上三條均線</span></div>
+                <div class="rule"><strong>漲幅 &gt; 3%</strong><span>相對前一交易日收盤</span></div>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="controls">
+                <div>
+                    <label for="codes">指定股票代碼</label>
+                    <input id="codes" placeholder="例如：2330, 2317；留空掃描全部上市清單">
+                </div>
+                <div>
+                    <label for="limit">最多掃描數</label>
+                    <input id="limit" type="number" min="1" placeholder="留空=全部">
+                </div>
+                <button id="runBtn">開始篩選</button>
+            </div>
+            <p class="status" id="statusText">尚未執行。</p>
+        </section>
+
+        <section class="stats" id="stats" style="display:none;">
+            <div class="stat"><div class="value" id="matchedCount">0</div><div class="label">符合標的</div></div>
+            <div class="stat"><div class="value" id="analyzedCount">0</div><div class="label">已分析</div></div>
+            <div class="stat"><div class="value" id="requestedCount">0</div><div class="label">請求掃描</div></div>
+            <div class="stat"><div class="value" id="missingShares">0</div><div class="label">缺股數跳過</div></div>
+            <div class="stat"><div class="value" id="elapsed">0s</div><div class="label">耗時</div></div>
+        </section>
+
+        <section class="panel">
+            <div id="resultArea" class="empty">篩選結果會顯示在這裡。</div>
+        </section>
+    </div>
+
+    <script>
+        const runBtn = document.getElementById('runBtn');
+        const statusText = document.getElementById('statusText');
+        const resultArea = document.getElementById('resultArea');
+        const stats = document.getElementById('stats');
+
+        function conditionMark(value) {
+            return value ? '<span class="ok">✓</span>' : '<span class="bad">✕</span>';
+        }
+
+        function numberText(value, digits = 2) {
+            if (value === null || value === undefined || Number.isNaN(Number(value))) return '-';
+            return Number(value).toLocaleString('zh-TW', { maximumFractionDigits: digits, minimumFractionDigits: digits });
+        }
+
+        function renderTable(rows) {
+            if (!rows.length) {
+                resultArea.className = 'empty';
+                resultArea.innerHTML = '沒有符合四項條件的標的。';
+                return;
+            }
+            resultArea.className = 'table-wrap';
+            resultArea.innerHTML = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>代碼</th>
+                            <th>名稱</th>
+                            <th>現價</th>
+                            <th>漲幅%</th>
+                            <th>週轉率%</th>
+                            <th>量比</th>
+                            <th>MA5</th>
+                            <th>MA10</th>
+                            <th>MA20</th>
+                            <th>TURN</th>
+                            <th>量比</th>
+                            <th>均線</th>
+                            <th>漲幅</th>
+                            <th>日期</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rows.map(row => `
+                            <tr class="${row.matched ? 'match' : ''}">
+                                <td><strong>${row.code}</strong></td>
+                                <td>${row.name}</td>
+                                <td>${numberText(row.price)}</td>
+                                <td>${numberText(row.change_percent)}</td>
+                                <td>${numberText(row.turnover_rate)}</td>
+                                <td>${numberText(row.volume_ratio)}</td>
+                                <td>${numberText(row.ma5)}</td>
+                                <td>${numberText(row.ma10)}</td>
+                                <td>${numberText(row.ma20)}</td>
+                                <td>${conditionMark(row.conditions.turnover_gt_10)}</td>
+                                <td>${conditionMark(row.conditions.volume_ratio_gt_5)}</td>
+                                <td>${conditionMark(row.conditions.above_ma5_ma10_ma20)}</td>
+                                <td>${conditionMark(row.conditions.change_gt_3)}</td>
+                                <td>${row.date || '-'}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+        }
+
+        runBtn.addEventListener('click', async () => {
+            const codes = document.getElementById('codes').value
+                .split(/[,\s，]+/)
+                .map(item => item.trim())
+                .filter(Boolean);
+            const limitValue = document.getElementById('limit').value;
+            const body = {};
+            if (codes.length) body.stock_codes = codes;
+            if (limitValue) body.limit = Number(limitValue);
+
+            runBtn.disabled = true;
+            statusText.textContent = '正在抓取即時報價與歷史均線資料...';
+            resultArea.className = 'empty';
+            resultArea.textContent = '篩選中，請稍候。掃描全部上市股票可能需要數分鐘。';
+
+            try {
+                const response = await fetch('/api/realtime_screen', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const data = await response.json();
+                if (!data.success) throw new Error(data.error || '篩選失敗');
+
+                document.getElementById('matchedCount').textContent = data.matched_count.toLocaleString();
+                document.getElementById('analyzedCount').textContent = data.total_analyzed.toLocaleString();
+                document.getElementById('requestedCount').textContent = data.total_requested.toLocaleString();
+                document.getElementById('missingShares').textContent = data.skipped_missing_shares.toLocaleString();
+                document.getElementById('elapsed').textContent = `${data.elapsed_seconds}s`;
+                stats.style.display = 'grid';
+                statusText.textContent = `完成。符合 ${data.matched_count} 支，已分析 ${data.total_analyzed} 支。`;
+                renderTable(data.matched_stocks);
+            } catch (error) {
+                statusText.textContent = `錯誤：${error.message}`;
+                resultArea.className = 'empty';
+                resultArea.textContent = '篩選失敗，請稍後再試。';
+            } finally {
+                runBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>
