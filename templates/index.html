@@ -95,6 +95,27 @@
             flex-wrap: wrap;
         }
 
+        .tv-settings {
+            max-width: 720px;
+            margin: -20px auto 28px;
+            display: grid;
+            gap: 6px;
+        }
+
+        .tv-settings label {
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: #4a5568;
+        }
+
+        .tv-settings input {
+            width: 100%;
+            border: 1px solid #cbd5e1;
+            border-radius: 10px;
+            padding: 11px 12px;
+            font-size: 0.95rem;
+        }
+
         .btn {
             padding: 15px 30px;
             border: none;
@@ -580,6 +601,10 @@
                 <button id="updateBtn" class="btn btn-primary">更新股票資料</button>
                 <button id="screenBtn" class="btn btn-secondary">主力資金進場策略</button>
                 <a href="/realtime" class="btn btn-primary">強勢量價突破策略</a>
+            </div>
+            <div class="tv-settings">
+                <label for="tradingViewChartUrl">TradingView 原有圖表網址</label>
+                <input id="tradingViewChartUrl" placeholder="貼上你的圖表網址，例如：https://www.tradingview.com/chart/AbCdEf12/">
             </div>
 
             <div id="statusMessage" class="status-message"></div>
@@ -1150,8 +1175,25 @@
             return tableHTML;
         }
 
+        const TRADING_VIEW_CHART_KEY = 'tradingViewChartUrl';
+
+        function getTradingViewChartBase() {
+            const raw = (localStorage.getItem(TRADING_VIEW_CHART_KEY) || '').trim();
+            const match = raw.match(/^https?:\/\/(?:[a-z0-9-]+\.)?tradingview\.com\/chart\/([^/?#]+)/i);
+            return match ? `https://www.tradingview.com/chart/${match[1]}/` : 'https://www.tradingview.com/chart/';
+        }
+
         function tradingViewUrl(code) {
-            return `https://www.tradingview.com/chart/?symbol=TWSE:${encodeURIComponent(code)}`;
+            return `${getTradingViewChartBase()}?symbol=TWSE:${encodeURIComponent(code)}`;
+        }
+
+        function initTradingViewSetting() {
+            const input = document.getElementById('tradingViewChartUrl');
+            if (!input) return;
+            input.value = localStorage.getItem(TRADING_VIEW_CHART_KEY) || '';
+            input.addEventListener('change', () => {
+                localStorage.setItem(TRADING_VIEW_CHART_KEY, input.value.trim());
+            });
         }
 
         // 格式化成交量
@@ -1175,6 +1217,10 @@
         // 事件監聽器
         document.getElementById('updateBtn').addEventListener('click', updateStockData);
         document.getElementById('screenBtn').addEventListener('click', screenStocks);
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeApp();
+            initTradingViewSetting();
+        });
 
     </script>
 </body>
