@@ -141,6 +141,12 @@
         th:first-child, td:first-child,
         th:nth-child(2), td:nth-child(2) { text-align: left; }
         th { background: #f8fafc; color: #334155; }
+        .symbol-link {
+            color: #2563eb;
+            font-weight: 800;
+            text-decoration: none;
+        }
+        .symbol-link:hover { text-decoration: underline; }
         tr.match { background: #fff7ed; }
         .ok { color: #15803d; font-weight: 800; }
         .bad { color: #b91c1c; font-weight: 800; }
@@ -241,6 +247,10 @@
             return Number(value).toLocaleString('zh-TW', { maximumFractionDigits: digits, minimumFractionDigits: digits });
         }
 
+        function tradingViewUrl(code) {
+            return `https://www.tradingview.com/chart/?symbol=TWSE:${encodeURIComponent(code)}`;
+        }
+
         function renderTable(rows) {
             if (!rows.length) {
                 resultArea.className = 'empty';
@@ -271,7 +281,7 @@
                     <tbody>
                         ${rows.map(row => `
                             <tr class="${row.matched ? 'match' : ''}">
-                                <td><strong>${row.code}</strong></td>
+                                <td><a class="symbol-link" href="${tradingViewUrl(row.code)}" target="_blank" rel="noopener noreferrer">${row.code}</a></td>
                                 <td>${row.name}</td>
                                 <td>${numberText(row.price)}</td>
                                 <td>${numberText(row.change_percent)}</td>
