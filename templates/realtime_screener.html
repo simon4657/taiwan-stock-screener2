@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="app-version" content="realtime-rule-screener-2026-06-18">
+    <meta name="app-version" content="realtime-progress-screener-2026-06-18">
     <title>即時強勢股條件篩選</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -77,6 +77,39 @@
         }
         button:disabled { opacity: .55; cursor: not-allowed; }
         .status { color: #475569; line-height: 1.6; }
+        .progress-box {
+            margin-top: 14px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            background: #f8fafc;
+            padding: 12px;
+        }
+        .progress-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            color: #475569;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        .progress-row strong {
+            color: #0f172a;
+            font-size: 16px;
+        }
+        .progress-track {
+            height: 10px;
+            background: #e2e8f0;
+            border-radius: 999px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-bar {
+            width: 0%;
+            height: 100%;
+            background: #2563eb;
+            border-radius: 999px;
+            transition: width .25s ease;
+        }
         .stats {
             display: grid;
             grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -159,6 +192,19 @@
                 <button id="runBtn">開始篩選</button>
             </div>
             <p class="status" id="statusText">尚未執行。</p>
+            <div class="progress-box" id="progressBox" style="display:none;">
+                <div class="progress-row">
+                    <span id="progressLabel">準備中</span>
+                    <strong id="progressPercent">0%</strong>
+                </div>
+                <div class="progress-track">
+                    <div class="progress-bar" id="progressBar"></div>
+                </div>
+                <div class="progress-row">
+                    <span id="progressCount">0 / 0</span>
+                    <span id="progressMessage">等待中</span>
+                </div>
+            </div>
         </section>
 
         <section class="stats" id="stats" style="display:none;">
@@ -179,6 +225,12 @@
         const statusText = document.getElementById('statusText');
         const resultArea = document.getElementById('resultArea');
         const stats = document.getElementById('stats');
+        const progressBox = document.getElementById('progressBox');
+        const progressLabel = document.getElementById('progressLabel');
+        const progressPercent = document.getElementById('progressPercent');
+        const progressBar = document.getElementById('progressBar');
+        const progressCount = document.getElementById('progressCount');
+        const progressMessage = document.getElementById('progressMessage');
 
         function conditionMark(value) {
             return value ? '<span class="ok">✓</span>' : '<span class="bad">✕</span>';
@@ -240,6 +292,50 @@
             `;
         }
 
+        function updateProgress(job) {
+            const total = Number(job.total || 0);
+            const progress = Number(job.progress || 0);
+            const percent = total > 0 ? Math.min(100, Number(job.percent || (progress / total * 100))) : Number(job.percent || 0);
+            progressBox.style.display = 'block';
+            progressLabel.textContent = job.is_running ? '篩選進行中' : '篩選完成';
+            progressPercent.textContent = `${percent.toFixed(percent % 1 === 0 ? 0 : 1)}%`;
+            progressBar.style.width = `${percent}%`;
+            progressCount.textContent = `${progress.toLocaleString()} / ${total.toLocaleString()}`;
+            progressMessage.textContent = job.message || '正在處理...';
+        }
+
+        function applyResult(data) {
+            document.getElementById('matchedCount').textContent = data.matched_count.toLocaleString();
+            document.getElementById('analyzedCount').textContent = data.total_analyzed.toLocaleString();
+            document.getElementById('requestedCount').textContent = data.total_requested.toLocaleString();
+            document.getElementById('missingShares').textContent = data.skipped_missing_shares.toLocaleString();
+            document.getElementById('elapsed').textContent = `${data.elapsed_seconds}s`;
+            stats.style.display = 'grid';
+            statusText.textContent = `完成。符合 ${data.matched_count} 支，已分析 ${data.total_analyzed} 支。`;
+            renderTable(data.matched_stocks);
+        }
+
+        function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        async function pollRealtimeJob(jobId) {
+            while (true) {
+                const response = await fetch(`/api/realtime_status/${encodeURIComponent(jobId)}`);
+                const job = await response.json();
+                if (!response.ok || !job.success) {
+                    throw new Error(job.error || '查詢進度失敗');
+                }
+                updateProgress(job);
+                if (!job.is_running) {
+                    if (job.error) throw new Error(job.error);
+                    if (!job.result) throw new Error('篩選完成但沒有結果資料');
+                    return job.result;
+                }
+                await sleep(1200);
+            }
+        }
+
         runBtn.addEventListener('click', async () => {
             const codes = document.getElementById('codes').value
                 .split(/[,\s，]+/)
@@ -252,6 +348,8 @@
 
             runBtn.disabled = true;
             statusText.textContent = '正在抓取即時報價與歷史均線資料...';
+            progressBox.style.display = 'block';
+            updateProgress({ progress: 0, total: 0, percent: 0, message: '正在建立篩選任務...', is_running: true });
             resultArea.className = 'empty';
             resultArea.textContent = '篩選中，請稍候。掃描全部上市股票可能需要數分鐘。';
 
@@ -261,17 +359,11 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body),
                 });
-                const data = await response.json();
-                if (!data.success) throw new Error(data.error || '篩選失敗');
+                const startData = await response.json();
+                if (!response.ok || !startData.success) throw new Error(startData.error || '篩選失敗');
 
-                document.getElementById('matchedCount').textContent = data.matched_count.toLocaleString();
-                document.getElementById('analyzedCount').textContent = data.total_analyzed.toLocaleString();
-                document.getElementById('requestedCount').textContent = data.total_requested.toLocaleString();
-                document.getElementById('missingShares').textContent = data.skipped_missing_shares.toLocaleString();
-                document.getElementById('elapsed').textContent = `${data.elapsed_seconds}s`;
-                stats.style.display = 'grid';
-                statusText.textContent = `完成。符合 ${data.matched_count} 支，已分析 ${data.total_analyzed} 支。`;
-                renderTable(data.matched_stocks);
+                const data = startData.async ? await pollRealtimeJob(startData.job_id) : startData;
+                applyResult(data);
             } catch (error) {
                 statusText.textContent = `錯誤：${error.message}`;
                 resultArea.className = 'empty';

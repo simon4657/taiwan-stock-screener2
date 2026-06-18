@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-DEPLOY_VERSION = "realtime-rule-screener-2026-06-18"
+DEPLOY_VERSION = "realtime-progress-screener-2026-06-18"
 
 # 全域變數
 stocks_data = {}
@@ -48,6 +48,8 @@ update_lock = threading.Lock()
 
 issued_shares_cache = None
 issued_shares_cache_time = None
+realtime_jobs = {}
+realtime_jobs_lock = threading.Lock()
 
 # 台灣時區
 TW_TZ = pytz.timezone('Asia/Taipei')
@@ -61,11 +63,11 @@ def convert_roc_date_to_ad(roc_date_str):
     try:
         if not roc_date_str or len(roc_date_str) != 7:
             return None
-        
+
         roc_year = int(roc_date_str[:3])
         month = int(roc_date_str[3:5])
         day = int(roc_date_str[5:7])
-        
+
         ad_year = roc_year + 1911
         return f"{ad_year:04d}-{month:02d}-{day:02d}"
     except:
@@ -83,7 +85,7 @@ def convert_ad_date_to_roc(ad_date_str):
                 day = ad_date_str[6:8]
         else:
             return None
-        
+
         roc_year = int(year) - 1911
         return f"{roc_year:03d}{int(month):02d}{int(day):02d}"
     except:
@@ -1167,36 +1169,36 @@ TWSE_STOCK_LIST = None  # 將在首次更新時從 Yahoo Finance 動態取得
 
 def get_twse_stock_codes():
     """取得上市股票代碼清單
-    
+
     優先使用內建清單（避免 Render 等海外環境被 TWSE 封鎖），
     將嘗試從 TWSE API 取得最新清單作為更新機制
     """
     global TWSE_STOCK_LIST
-    
+
     # 如果已經有快取的清單，直接使用
     if TWSE_STOCK_LIST:
         return TWSE_STOCK_LIST
-    
+
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
-    
+
     # 嘗試從 TWSE API 取得最新股票清單（如果可用）
     twse_apis = [
         'https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL',
         'https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY_ALL?response=json',
     ]
-    
+
     for api_url in twse_apis:
         try:
             response = requests.get(api_url, headers=headers, timeout=10, verify=False)
             content_type = response.headers.get('Content-Type', '')
             if 'text/html' in content_type:
                 continue  # 被封鎖，跳過
-            
+
             raw_json = response.json()
             stock_list = {}
-            
+
             if isinstance(raw_json, list):
                 # openapi 格式
                 for item in raw_json:
@@ -1214,7 +1216,7 @@ def get_twse_stock_codes():
                         if code and len(code) == 4 and code.isdigit() and 1000 <= int(code) <= 9999:
                             if not any(kw in name for kw in ['DR', 'TDR', 'ETF', 'ETN', '權證', '特別股', '存託憑證']):
                                 stock_list[code] = name
-            
+
             if len(stock_list) > 500:
                 TWSE_STOCK_LIST = stock_list
                 logger.info(f"從 TWSE API 取得 {len(stock_list)} 支上市股票清單")
@@ -1222,7 +1224,7 @@ def get_twse_stock_codes():
         except Exception as e:
             logger.warning(f"從 TWSE API 取得股票清單失敗: {e}")
             continue
-    
+
     # TWSE API 被封鎖或不可用，使用內建股票清單
     logger.info(f"使用內建上市股票清單（{len(BUILTIN_TWSE_STOCK_LIST)} 支）")
     TWSE_STOCK_LIST = BUILTIN_TWSE_STOCK_LIST.copy()
@@ -1231,14 +1233,14 @@ def get_twse_stock_codes():
 def discover_twse_stocks_via_yahoo():
     """透過 Yahoo Finance API 動態探測有效的上市股票代碼"""
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    
+
     # 產生常見的上市股票代碼範圍
     candidate_codes = []
     for i in range(1101, 9999):
         candidate_codes.append(str(i))
-    
+
     valid_stocks = {}
-    
+
     def check_stock(code):
         try:
             url = f'https://query1.finance.yahoo.com/v8/finance/chart/{code}.TW?interval=1d&range=1d'
@@ -1255,7 +1257,7 @@ def discover_twse_stocks_via_yahoo():
             return None
         except:
             return None
-    
+
     # 分批探測（每批 500 個代碼）
     batch_size = 500
     for i in range(0, len(candidate_codes), batch_size):
@@ -1266,10 +1268,10 @@ def discover_twse_stocks_via_yahoo():
                 result = future.result()
                 if result:
                     valid_stocks[result[0]] = result[1]
-        
+
         if len(valid_stocks) > 800:  # 已找到足夠多的股票
             break
-    
+
     logger.info(f"透過 Yahoo Finance 探測到 {len(valid_stocks)} 支上市股票")
     return valid_stocks
 
@@ -1302,7 +1304,7 @@ def build_stock_row(code, name, close_price, open_price, high_price, low_price, 
         return None
     if close_price <= 0 or volume_shares <= 0:
         return None
-    
+
     previous_close = close_price - change
     change_pct = (change / previous_close * 100) if previous_close else 0
     return {
@@ -1322,13 +1324,13 @@ def build_stock_row(code, name, close_price, open_price, high_price, low_price, 
 def parse_twse_daily_payload(raw_json, stock_list):
     results = []
     trade_date = get_taiwan_time().strftime('%Y-%m-%d')
-    
+
     if isinstance(raw_json, dict):
         rows = raw_json.get('data', [])
         if raw_json.get('date') and len(str(raw_json['date'])) == 8:
             date_text = str(raw_json['date'])
             trade_date = f"{date_text[:4]}-{date_text[4:6]}-{date_text[6:8]}"
-        
+
         for row in rows:
             if len(row) < 9:
                 continue
@@ -1344,7 +1346,7 @@ def parse_twse_daily_payload(raw_json, stock_list):
             if stock_row:
                 results.append(stock_row)
         return results
-    
+
     if isinstance(raw_json, list):
         for item in raw_json:
             code = str(item.get('Code', '')).strip()
@@ -1359,7 +1361,7 @@ def parse_twse_daily_payload(raw_json, stock_list):
             if stock_row:
                 results.append(stock_row)
         return results
-    
+
     return results
 
 def fetch_twse_daily_all_data(stock_list):
@@ -1376,7 +1378,7 @@ def fetch_twse_daily_all_data(stock_list):
             if response.status_code != 200 or 'text/html' in content_type:
                 logger.warning(f"TWSE 全市場資料不可用，HTTP {response.status_code}, content-type={content_type}, url={url}")
                 continue
-            
+
             results = parse_twse_daily_payload(response.json(), stock_list)
             if results:
                 logger.info(f"從 TWSE 全市場資料取得 {len(results)} 支上市股票，url={url}")
@@ -1395,19 +1397,19 @@ def fetch_single_stock_yahoo(code, session=None):
         r = http.get(url, headers=YAHOO_HEADERS, timeout=8, verify=False)
         if r.status_code != 200:
             return None
-        
+
         data = r.json()
         chart_result = data.get('chart', {}).get('result', [None])[0]
         if not chart_result:
             return None
-        
+
         meta = chart_result.get('meta', {})
         indicators = chart_result.get('indicators', {}).get('quote', [{}])[0]
         timestamps = chart_result.get('timestamp', [])
-        
+
         if not timestamps or not indicators.get('close'):
             return None
-        
+
         # 取最後一天的資料
         idx = -1
         close_price = indicators['close'][idx]
@@ -1415,24 +1417,24 @@ def fetch_single_stock_yahoo(code, session=None):
         high_price = indicators['high'][idx]
         low_price = indicators['low'][idx]
         volume = indicators['volume'][idx]
-        
+
         if close_price is None or volume is None:
             return None
-        
+
         # 計算漲跌（使用前一天收盤價）
         prev_close = meta.get('chartPreviousClose', close_price)
         if len(indicators['close']) >= 2 and indicators['close'][-2] is not None:
             prev_close = indicators['close'][-2]
-        
+
         change = close_price - prev_close
         change_pct = (change / prev_close * 100) if prev_close != 0 else 0
-        
+
         # 取得交易日期（使用台灣時區）
         trade_date = yahoo_timestamp_to_date(timestamps[idx])
-        
+
         # 取得股票名稱
         stock_name = meta.get('shortName', '') or meta.get('longName', '')
-        
+
         return {
             'code': code,
             'name': stock_name,
@@ -1451,40 +1453,40 @@ def fetch_single_stock_yahoo(code, session=None):
 
 def fetch_otc_stock_data():
     """獲取上市股票資料（使用 Yahoo Finance API）
-    
+
     由於 TWSE API 封鎖海外伺服器 IP（如 Render），
     優先使用 TWSE 全市場日資料；不可用時回退 Yahoo Finance chart API。
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    
+
     try:
         logger.info("開始獲取上市股票資料（TWSE 優先，Yahoo Finance 備援）...")
-        
+
         # 取得上市股票代碼清單
         stock_list = get_twse_stock_codes()
         if not stock_list:
             logger.error("無法取得上市股票代碼清單")
             return None
-        
+
         codes = list(stock_list.keys())
         logger.info(f"準備下載 {len(codes)} 支上市股票資料...")
-        
+
         update_status['total'] = len(codes)
         update_status['progress'] = 0
         update_status['message'] = f'正在嘗試從 TWSE 單次下載 {len(codes)} 支上市股票資料...'
-        
+
         twse_results = fetch_twse_daily_all_data(stock_list)
         if twse_results:
             update_status['total'] = len(twse_results)
             update_status['progress'] = len(twse_results)
             update_status['message'] = f'完成下載：從 TWSE 取得 {len(twse_results)} 支上市股票資料'
             return twse_results
-        
+
         # TWSE 不可用時，使用 Yahoo chart API 並行下載。
         all_results = []
         failed_count = 0
         seen_codes = set()
-        
+
         update_status['message'] = f'正在使用 Yahoo Finance 下載 {len(codes)} 支上市股票資料...'
         for i in range(0, len(codes), YAHOO_FALLBACK_BATCH_SIZE):
             batch_codes = codes[i:i + YAHOO_FALLBACK_BATCH_SIZE]
@@ -1503,42 +1505,42 @@ def fetch_otc_stock_data():
                         failed_count += 1
                     update_status['progress'] = min(len(seen_codes) + failed_count, len(codes))
                     update_status['message'] = f"已處理 {update_status['progress']}/{len(codes)} 支上市股票資料..."
-        
+
         if update_status['progress'] < len(codes):
             update_status['progress'] = len(codes)
 
         if not all_results:
             logger.error("Yahoo Finance API 無法取得任何股票資料")
             return None
-        
+
         final_failed_count = len(codes) - len(seen_codes)
         logger.info(f"成功從 Yahoo Finance 取得 {len(all_results)} 支上市股票資料（未取得 {final_failed_count} 支）")
         update_status['message'] = f'完成下載：取得 {len(all_results)} 支，未取得 {final_failed_count} 支'
         return all_results
-        
+
     except Exception as e:
         logger.error(f"從 Yahoo Finance 獲取上市股票資料時發生錯誤: {str(e)}")
         return None
 def process_otc_stock_data(raw_data):
     """處理上市股票資料（從 Yahoo Finance API）
-    
+
     raw_data 為 fetch_otc_stock_data 回傳的 list，每個元素已經是處理好的 dict 格式。
     """
     processed_stocks = {}
     current_date = None
-    
+
     try:
         for item in raw_data:
             stock_code = item.get('code', '').strip()
             stock_name = item.get('name', '').strip()
-            
+
             # 過濾條件：只處理上市股票（代碼1000-9999）
-            if (stock_code and 
-                len(stock_code) == 4 and 
+            if (stock_code and
+                len(stock_code) == 4 and
                 stock_code.isdigit() and
                 1000 <= int(stock_code) <= 9999 and
                 not any(keyword in stock_name for keyword in ['DR', 'TDR', 'ETF', 'ETN', '權證', '特別股', '存託憑證'])):
-                
+
                 try:
                     closing_price = float(item.get('close', 0))
                     opening_price = float(item.get('open', 0))
@@ -1548,12 +1550,12 @@ def process_otc_stock_data(raw_data):
                     change = float(item.get('change', 0))
                     change_percent = float(item.get('change_percent', 0))
                     trade_date = item.get('date', '')
-                    
+
                     # 過濾無效資料
                     if closing_price > 0 and trade_volume > 0:
                         if not current_date and trade_date:
                             current_date = trade_date
-                        
+
                         processed_stocks[stock_code] = {
                             'code': stock_code,
                             'name': stock_name,
@@ -1567,14 +1569,14 @@ def process_otc_stock_data(raw_data):
                             'change_percent': change_percent,
                             'market': 'TWSE'  # 標記為上市市場
                         }
-                        
+
                 except (ValueError, TypeError) as e:
                     logger.warning(f"處理股票 {stock_code} 資料時發生錯誤: {e}")
                     continue
-        
+
         logger.info(f"成功處理 {len(processed_stocks)} 支上市股票資料")
         return processed_stocks, current_date
-        
+
     except Exception as e:
         logger.error(f"處理上市股票資料時發生錯誤: {str(e)}")
         return {}, None
@@ -1583,11 +1585,11 @@ def is_valid_otc_stock(stock_code, stock_name):
     """判斷是否為有效的上市一般股票"""
     if not stock_code or not stock_name:
         return False
-    
+
     # 檢查股票代碼格式
     if not stock_code.isdigit() or len(stock_code) < 4:
         return False
-    
+
     # 上市股票代碼範圍（一般為1000-9999）
     try:
         code_num = int(stock_code)
@@ -1595,17 +1597,17 @@ def is_valid_otc_stock(stock_code, stock_name):
             return False
     except ValueError:
         return False
-    
+
     # 排除特殊股票類型
     exclude_suffixes = ['B', 'K', 'L', 'R', 'F']  # ETF、債券等
     if any(stock_code.endswith(suffix) for suffix in exclude_suffixes):
         return False
-    
+
     # 排除特殊名稱
     exclude_keywords = ['ETF', 'ETN', '權證', '特別股', '存託憑證', '債券', 'REITs']
     if any(keyword in stock_name for keyword in exclude_keywords):
         return False
-    
+
     return True
 
 def pine_nz(value, fallback=0.0):
@@ -1622,52 +1624,52 @@ def calculate_weighted_simple_average_series(src_values, length, weight):
     """Pine Script calculate_weighted_simple_average() as a full series."""
     if not src_values or length <= 0:
         return []
-    
+
     outputs = []
     sum_values = []
-    
+
     for i, src in enumerate(src_values):
         previous_sum = sum_values[i - 1] if i > 0 else None
         aged_src = src_values[i - length] if i >= length else None
-        
+
         if src is None:
             sum_float = None
         else:
             sum_float = pine_nz(previous_sum) - pine_nz(aged_src) + src
         sum_values.append(sum_float)
-        
+
         moving_average = None if aged_src is None or sum_float is None else sum_float / length
         previous_output = outputs[i - 1] if i > 0 else None
-        
+
         if previous_output is None:
             output = moving_average
         elif src is None:
             output = None
         else:
             output = (src * weight + previous_output * (length - weight)) / length
-        
+
         outputs.append(output)
-    
+
     return outputs
 
 def calculate_pine_ema_series(values, period):
     """TradingView-like ta.ema() series, seeded from the first non-na value."""
     if not values or period <= 0:
         return []
-    
+
     alpha = 2 / (period + 1)
     outputs = []
     previous = None
-    
+
     for value in values:
         if value is None:
             outputs.append(previous)
             continue
-        
+
         ema = value if previous is None else (alpha * value + (1 - alpha) * previous)
         outputs.append(ema)
         previous = ema
-    
+
     return outputs
 
 def format_optional_number(value):
@@ -1677,16 +1679,16 @@ def calculate_pine_script_indicators(ohlc_data):
     """完全按照Pine Script邏輯計算技術指標"""
     if len(ohlc_data) < 34:  # 需要足夠的歷史數據
         return None
-    
+
     # 提取OHLC數據
     closes = [d['close'] for d in ohlc_data]
     highs = [d['high'] for d in ohlc_data]
     lows = [d['low'] for d in ohlc_data]
     opens = [d['open'] for d in ohlc_data]
-    
+
     # 計算典型價格 (2 * close + high + low + open) / 5
     typical_prices = [(2 * c + h + l + o) / 5 for c, h, l, o in zip(closes, highs, lows, opens)]
-    
+
     relative_positions_27 = []
     for i in range(len(closes)):
         start_idx = max(0, i - 26)
@@ -1694,17 +1696,17 @@ def calculate_pine_script_indicators(ohlc_data):
         highest_27 = max(highs[start_idx:i+1])
         relative_position = safe_divide(closes[i] - lowest_27, highest_27 - lowest_27)
         relative_positions_27.append(None if relative_position is None else relative_position * 100)
-    
+
     wsa1_values = calculate_weighted_simple_average_series(relative_positions_27, 5, 1)
     wsa2_values = calculate_weighted_simple_average_series(wsa1_values, 3, 1)
-    
+
     fund_flow_values = []
     for wsa1, wsa2 in zip(wsa1_values, wsa2_values):
         if wsa1 is None or wsa2 is None:
             fund_flow_values.append(None)
         else:
             fund_flow_values.append((3 * wsa1 - 2 * wsa2 - 50) * 1.032 + 50)
-    
+
     # 計算多空線（13期EMA）
     # 先計算標準化的典型價格
     bull_bear_values = []
@@ -1713,12 +1715,12 @@ def calculate_pine_script_indicators(ohlc_data):
         start_idx = max(0, i - 33)
         lowest_34 = min(lows[start_idx:i+1])
         highest_34 = max(highs[start_idx:i+1])
-        
+
         normalized_price = safe_divide(typical_prices[i] - lowest_34, highest_34 - lowest_34)
         bull_bear_values.append(None if normalized_price is None else normalized_price * 100)
-    
+
     bull_bear_line_values = calculate_pine_ema_series(bull_bear_values, 13)
-    
+
     if len(fund_flow_values) >= 2 and len(bull_bear_line_values) >= 2:
         signal_points = []
         for i in range(1, len(fund_flow_values)):
@@ -1741,7 +1743,7 @@ def calculate_pine_script_indicators(ohlc_data):
                 'is_oversold': is_oversold_at_bar,
                 'banker_entry_signal': is_crossover_at_bar and is_oversold_at_bar,
             })
-        
+
         current_fund = fund_flow_values[-1]
         previous_fund = fund_flow_values[-2]
         current_bull_bear = bull_bear_line_values[-1]
@@ -1752,20 +1754,20 @@ def calculate_pine_script_indicators(ohlc_data):
             if point['index'] >= lookback_start and point['banker_entry_signal']:
                 latest_signal = point
                 break
-        
+
         current_point = signal_points[-1]
         is_crossover_today = current_point['is_crossover']
         is_oversold_today = current_point['is_oversold']
         current_day_signal = current_point['banker_entry_signal']
         banker_entry_signal = latest_signal is not None
         signal_offset_days = len(fund_flow_values) - 1 - latest_signal['index'] if latest_signal else None
-        
+
         # 記錄詳細計算結果用於調試（僅記錄符合條件的股票）
         if banker_entry_signal:
             logger.info(f"🟡 發現黃柱信號:")
             logger.info(f"  當日: 資金流向={format_optional_number(current_fund)}, 多空線={format_optional_number(current_bull_bear)}, crossover={is_crossover_today}, 超賣={is_oversold_today}, 黃柱={current_day_signal}")
             logger.info(f"  最近黃柱距今 {signal_offset_days} 個交易日")
-        
+
         return {
             'fund_trend': current_fund if current_fund is not None else 0,
             'multi_short_line': current_bull_bear if current_bull_bear is not None else 0,
@@ -1778,30 +1780,30 @@ def calculate_pine_script_indicators(ohlc_data):
             'fund_trend_previous': previous_fund if previous_fund is not None else (current_fund or 0),
             'multi_short_line_previous': previous_bull_bear if previous_bull_bear is not None else (current_bull_bear or 0)
         }
-    
+
     return None
 
 def calculate_ema(values, period):
     """計算指數移動平均"""
     if len(values) < period:
         return sum(values) / len(values) if values else 0
-    
+
     multiplier = 2 / (period + 1)
     ema = sum(values[:period]) / period  # 初始SMA
-    
+
     for value in values[period:]:
         ema = (value * multiplier) + (ema * (1 - multiplier))
-    
+
     return ema
 
 def update_stocks_data_background():
     """後台執行的更新任務"""
     global stocks_data, last_update_time, data_date, update_status
-    
+
     try:
         update_status['message'] = '正在取得上市股票清單...'
         logger.info("開始後台更新上市股票資料...")
-        
+
         # 獲取上市股票資料
         raw_data = fetch_otc_stock_data()
         if not raw_data:
@@ -1811,9 +1813,9 @@ def update_stocks_data_background():
             update_status['message'] = '無法獲取股票資料，請稍後再試'
             update_status['finished_at'] = get_taiwan_time().strftime('%Y-%m-%d %H:%M:%S')
             return
-        
+
         update_status['message'] = '正在處理股票資料...'
-        
+
         # 處理資料
         processed_data, current_date = process_otc_stock_data(raw_data)
         if not processed_data:
@@ -1823,19 +1825,19 @@ def update_stocks_data_background():
             update_status['message'] = '處理股票資料失敗，請稍後再試'
             update_status['finished_at'] = get_taiwan_time().strftime('%Y-%m-%d %H:%M:%S')
             return
-        
+
         # 更新全域變數
         stocks_data = processed_data
         data_date = current_date
         last_update_time = get_taiwan_time()
-        
+
         update_status['is_running'] = False
         update_status['success'] = True
         update_status['message'] = f'成功更新 {len(stocks_data)} 支上市股票資料'
         update_status['finished_at'] = get_taiwan_time().strftime('%Y-%m-%d %H:%M:%S')
-        
+
         logger.info(f"後台更新完成：{len(stocks_data)} 支上市股票資料，資料日期: {data_date}")
-        
+
     except Exception as e:
         logger.error(f"後台更新上市股票資料時發生錯誤: {str(e)}")
         update_status['is_running'] = False
@@ -1846,25 +1848,25 @@ def update_stocks_data_background():
 def update_stocks_data():
     """更新股票資料（直接同步版本，保留相容）"""
     global stocks_data, last_update_time, data_date
-    
+
     try:
         logger.info("開始更新上市股票資料...")
-        
+
         raw_data = fetch_otc_stock_data()
         if not raw_data:
             return False
-        
+
         processed_data, current_date = process_otc_stock_data(raw_data)
         if not processed_data:
             return False
-        
+
         stocks_data = processed_data
         data_date = current_date
         last_update_time = get_taiwan_time()
-        
+
         logger.info(f"成功更新 {len(stocks_data)} 支上市股票資料，資料日期: {data_date}")
         return True
-        
+
     except Exception as e:
         logger.error(f"更新上市股票資料時發生錯誤: {str(e)}")
         return False
@@ -1889,18 +1891,18 @@ def diagnose():
         'data_source': 'TWSE daily all API with Yahoo Finance chart fallback',
         'tests': {}
     }
-    
+
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     }
-    
+
     # 測試 Yahoo Finance API
     try:
         start = time_module.time()
         url = 'https://query1.finance.yahoo.com/v8/finance/chart/2330.TW?interval=1d&range=1d'
         response = requests.get(url, headers=headers, timeout=15, verify=False)
         elapsed = time_module.time() - start
-        
+
         if response.status_code == 200:
             data = response.json()
             chart_result = data.get('chart', {}).get('result', [None])[0]
@@ -1931,20 +1933,20 @@ def diagnose():
             'error': str(e),
             'error_type': type(e).__name__
         }
-    
+
     # 測試 TWSE API（用於取得股票清單）
     twse_apis = [
         ('openapi_twse', 'https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL'),
         ('twse_rwd', 'https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY_ALL?response=json'),
     ]
-    
+
     for test_name, url in twse_apis:
         try:
             start = time_module.time()
             response = requests.get(url, headers=headers, timeout=15, verify=False)
             elapsed = time_module.time() - start
             content_type = response.headers.get('Content-Type', 'unknown')
-            
+
             if 'text/html' in content_type:
                 result['tests'][test_name] = {
                     'status': 'blocked',
@@ -1963,14 +1965,14 @@ def diagnose():
                 'status': 'error',
                 'error': str(e)
             }
-    
+
     # 目前股票資料狀態
     result['stocks_data_count'] = len(stocks_data)
     result['data_date'] = data_date
     result['last_update'] = last_update_time.strftime('%Y-%m-%d %H:%M:%S') if last_update_time else None
     result['stock_list_cached'] = TWSE_STOCK_LIST is not None
     result['stock_list_count'] = len(TWSE_STOCK_LIST) if TWSE_STOCK_LIST else 0
-    
+
     return jsonify(result)
 
 @app.route('/api/health')
@@ -1978,12 +1980,12 @@ def health_check():
     """健康檢查API"""
     try:
         taiwan_time = get_taiwan_time()
-        
+
         # 確保時間格式正確
         last_update_str = None
         if last_update_time:
             last_update_str = last_update_time.strftime('%Y-%m-%d %H:%M:%S')
-        
+
         return jsonify({
             'status': 'healthy',
             'timestamp': taiwan_time.strftime('%Y-%m-%d %H:%M:%S'),
@@ -2011,7 +2013,7 @@ def version_check():
 def update_data():
     """更新股票資料API（非同步版本）"""
     global update_status
-    
+
     try:
         with update_lock:
             if update_status['is_running']:
@@ -2023,7 +2025,7 @@ def update_data():
                     'progress': update_status['progress'],
                     'total': update_status['total']
                 })
-            
+
             # 重置狀態並啟動後台執行緒
             update_status['is_running'] = True
             update_status['success'] = None
@@ -2032,18 +2034,18 @@ def update_data():
             update_status['message'] = '正在初始化...'
             update_status['started_at'] = get_taiwan_time().strftime('%Y-%m-%d %H:%M:%S')
             update_status['finished_at'] = None
-        
+
         # 在後台執行緒中啟動更新
         thread = threading.Thread(target=update_stocks_data_background, daemon=True)
         thread.start()
-        
+
         return jsonify({
             'success': True,
             'async': True,
             'status': 'started',
             'message': '更新已在後台啟動，請稍候約 60-90 秒...'
         })
-        
+
     except Exception as e:
         logger.error(f"更新API錯誤: {str(e)}")
         update_status['is_running'] = False
@@ -2059,7 +2061,7 @@ def get_update_status():
         last_update_str = None
         if last_update_time:
             last_update_str = last_update_time.strftime('%Y-%m-%d %H:%M:%S')
-        
+
         return jsonify({
             'is_running': update_status['is_running'],
             'progress': update_status['progress'],
@@ -2081,7 +2083,7 @@ def get_stocks():
     try:
         # 返回前50支股票作為預覽
         preview_stocks = dict(list(stocks_data.items())[:50])
-        
+
         return jsonify({
             'stocks': preview_stocks,
             'total_count': len(stocks_data),
@@ -2089,94 +2091,170 @@ def get_stocks():
             'data_date': data_date,
             'market': 'TWSE'
         })
-        
+
     except Exception as e:
         logger.error(f"獲取股票清單失敗: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/realtime_screen', methods=['POST'])
 def realtime_screen():
-    """依附件規則進行即時條件篩選。"""
+    """建立即時條件篩選任務；加 ?sync=1 可同步執行。"""
     try:
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        
         payload = request.get_json(silent=True) or {}
-        requested_codes = payload.get('stock_codes') or []
-        limit = payload.get('limit')
-        
-        stock_list = get_twse_stock_codes()
-        issued_shares = get_issued_shares_map()
-        
-        if requested_codes:
-            stock_codes = [str(code).strip() for code in requested_codes if str(code).strip() in stock_list]
-        else:
-            stock_codes = list(stock_list.keys())
-        
-        if isinstance(limit, int) and limit > 0:
-            stock_codes = stock_codes[:limit]
-        
-        started_at = get_taiwan_time()
-        results = []
-        matched = []
-        errors = []
-        skipped_missing_shares = 0
-        
-        def analyze_one(code):
-            shares = issued_shares.get(code)
-            if not shares:
-                return {'code': code, 'missing_shares': True}
-            return evaluate_realtime_rule(code, stock_list.get(code, code), shares)
-        
-        with ThreadPoolExecutor(max_workers=20) as executor:
-            futures = {executor.submit(analyze_one, code): code for code in stock_codes}
-            for future in as_completed(futures):
-                code = futures[future]
-                try:
-                    result = future.result()
-                    if not result:
-                        errors.append({'code': code, 'reason': 'no_realtime_or_history_data'})
-                        continue
-                    if result.get('missing_shares'):
-                        skipped_missing_shares += 1
-                        continue
-                    results.append(result)
-                    if result.get('matched'):
-                        matched.append(result)
-                except Exception as e:
-                    errors.append({'code': code, 'reason': str(e)})
-        
-        matched.sort(key=lambda item: (item['turnover_rate'] or 0, item['volume_ratio'], item['change_percent']), reverse=True)
-        results.sort(key=lambda item: (item['matched'], item['turnover_rate'] or 0, item['volume_ratio']), reverse=True)
-        
-        return jsonify({
-            'success': True,
-            'rules': {
-                'turnover_rate_gt': 10,
-                'volume_ratio_gt': 5,
-                'above_ma': [5, 10, 20],
-                'change_percent_gt': 3,
-            },
-            'matched_stocks': matched,
-            'all_results': results,
-            'total_requested': len(stock_codes),
-            'total_analyzed': len(results),
-            'matched_count': len(matched),
-            'skipped_missing_shares': skipped_missing_shares,
-            'error_count': len(errors),
-            'errors': errors[:30],
-            'query_time': started_at.isoformat(),
-            'elapsed_seconds': round((get_taiwan_time() - started_at).total_seconds(), 2),
-            'market': 'TWSE',
-        })
+        if request.args.get('sync') == '1':
+            return jsonify(run_realtime_screen_job(payload))
+
+        job_id = f"rt-{int(time.time() * 1000)}"
+        with realtime_jobs_lock:
+            realtime_jobs[job_id] = {
+                'job_id': job_id,
+                'success': True,
+                'is_running': True,
+                'progress': 0,
+                'total': 0,
+                'percent': 0,
+                'message': '正在初始化篩選任務...',
+                'started_at': get_taiwan_time().isoformat(),
+                'finished_at': None,
+                'result': None,
+                'error': None,
+            }
+
+        thread = threading.Thread(target=run_realtime_screen_job_background, args=(job_id, payload), daemon=True)
+        thread.start()
+        return jsonify({'success': True, 'async': True, 'job_id': job_id})
     except Exception as e:
         logger.error(f"即時條件篩選失敗: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/realtime_status/<job_id>')
+def realtime_screen_status(job_id):
+    """查詢即時條件篩選進度。"""
+    with realtime_jobs_lock:
+        job = realtime_jobs.get(job_id)
+        if not job:
+            return jsonify({'success': False, 'error': 'job_not_found'}), 404
+        return jsonify(job)
+
+def update_realtime_job(job_id, **updates):
+    with realtime_jobs_lock:
+        if job_id in realtime_jobs:
+            realtime_jobs[job_id].update(updates)
+
+def run_realtime_screen_job_background(job_id, payload):
+    try:
+        result = run_realtime_screen_job(payload, job_id=job_id)
+        update_realtime_job(
+            job_id,
+            is_running=False,
+            progress=result.get('total_requested', 0),
+            total=result.get('total_requested', 0),
+            percent=100,
+            message='篩選完成',
+            finished_at=get_taiwan_time().isoformat(),
+            result=result,
+        )
+    except Exception as e:
+        logger.error(f"即時條件篩選任務失敗: {e}")
+        update_realtime_job(
+            job_id,
+            is_running=False,
+            success=False,
+            message=f'篩選失敗: {e}',
+            finished_at=get_taiwan_time().isoformat(),
+            error=str(e),
+        )
+
+def run_realtime_screen_job(payload, job_id=None):
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    requested_codes = payload.get('stock_codes') or []
+    limit = payload.get('limit')
+    stock_list = get_twse_stock_codes()
+    issued_shares = get_issued_shares_map()
+
+    if requested_codes:
+        stock_codes = [str(code).strip() for code in requested_codes if str(code).strip() in stock_list]
+    else:
+        stock_codes = list(stock_list.keys())
+
+    if isinstance(limit, int) and limit > 0:
+        stock_codes = stock_codes[:limit]
+
+    started_at = get_taiwan_time()
+    results = []
+    matched = []
+    errors = []
+    skipped_missing_shares = 0
+    completed = 0
+    total = len(stock_codes)
+
+    if job_id:
+        update_realtime_job(job_id, total=total, message=f'正在分析 0/{total} 支股票...')
+
+    def analyze_one(code):
+        shares = issued_shares.get(code)
+        if not shares:
+            return {'code': code, 'missing_shares': True}
+        return evaluate_realtime_rule(code, stock_list.get(code, code), shares)
+
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        futures = {executor.submit(analyze_one, code): code for code in stock_codes}
+        for future in as_completed(futures):
+            code = futures[future]
+            completed += 1
+            try:
+                result = future.result()
+                if not result:
+                    errors.append({'code': code, 'reason': 'no_realtime_or_history_data'})
+                elif result.get('missing_shares'):
+                    skipped_missing_shares += 1
+                else:
+                    results.append(result)
+                    if result.get('matched'):
+                        matched.append(result)
+            except Exception as e:
+                errors.append({'code': code, 'reason': str(e)})
+
+            if job_id:
+                percent = round((completed / total * 100), 1) if total else 100
+                update_realtime_job(
+                    job_id,
+                    progress=completed,
+                    total=total,
+                    percent=percent,
+                    message=f'正在分析 {completed}/{total} 支股票...',
+                )
+
+    matched.sort(key=lambda item: (item['turnover_rate'] or 0, item['volume_ratio'], item['change_percent']), reverse=True)
+    results.sort(key=lambda item: (item['matched'], item['turnover_rate'] or 0, item['volume_ratio']), reverse=True)
+
+    return {
+        'success': True,
+        'rules': {
+            'turnover_rate_gt': 10,
+            'volume_ratio_gt': 5,
+            'above_ma': [5, 10, 20],
+            'change_percent_gt': 3,
+        },
+        'matched_stocks': matched,
+        'all_results': results,
+        'total_requested': total,
+        'total_analyzed': len(results),
+        'matched_count': len(matched),
+        'skipped_missing_shares': skipped_missing_shares,
+        'error_count': len(errors),
+        'errors': errors[:30],
+        'query_time': started_at.isoformat(),
+        'elapsed_seconds': round((get_taiwan_time() - started_at).total_seconds(), 2),
+        'market': 'TWSE',
+    }
 
 def format_volume(volume):
     """格式化成交張數顯示（1張=1000股）"""
     # 將成交量（股）轉換為成交張數（張）
     volume_lots = volume / 1000
-    
+
     if volume_lots >= 100000:  # 10萬張以上
         return f"{volume_lots / 10000:.1f}萬張"
     elif volume_lots >= 1000:  # 1千張以上
@@ -2188,9 +2266,9 @@ def calculate_trend_direction(current_value, previous_value, threshold=0.05):
     """計算趨勢方向和變化百分比"""
     if previous_value == 0:
         return "→", 0
-    
+
     change_percent = ((current_value - previous_value) / previous_value) * 100
-    
+
     if change_percent > threshold * 100:
         return "↑", change_percent
     elif change_percent < -threshold * 100:
@@ -2202,11 +2280,11 @@ def calculate_volume_ratio(current_volume, historical_volumes):
     """計算量比（當日成交量/近5日平均成交量）"""
     if not historical_volumes or len(historical_volumes) == 0:
         return 1.0
-    
+
     avg_volume = sum(historical_volumes) / len(historical_volumes)
     if avg_volume == 0:
         return 1.0
-    
+
     return current_volume / avg_volume
 
 def get_volume_ratio_class(volume_ratio):
@@ -2222,17 +2300,17 @@ def get_volume_ratio_class(volume_ratio):
 
 def fetch_historical_data_for_indicators(stock_code, days=60):
     """獲取歷史資料用於技術指標計算（上市股票版本，Yahoo Finance為主）"""
-    
+
     # 使用Yahoo Finance API獲取歷史數據
     try:
         logger.info(f"正在獲取 {stock_code} 歷史資料（Yahoo Finance API）...")
-        
+
         import requests
-        
+
         # Yahoo Finance API URL
         symbol = f"{stock_code}.TW"  # 上市股票使用.TW後綴
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-        
+
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Accept': 'application/json',
@@ -2240,39 +2318,39 @@ def fetch_historical_data_for_indicators(stock_code, days=60):
             'Cache-Control': 'no-cache',
             'Referer': 'https://finance.yahoo.com/'
         }
-        
+
         params = {
             'range': '3mo',
             'interval': '1d',
             'includeAdjustedClose': 'true'
         }
-        
+
         response = requests.get(url, headers=headers, params=params, timeout=20, verify=False)
-        
+
         if response.status_code == 200:
             data = response.json()
-            
-            if (data and 'chart' in data and 'result' in data['chart'] and 
+
+            if (data and 'chart' in data and 'result' in data['chart'] and
                 data['chart']['result'] and len(data['chart']['result']) > 0):
-                
+
                 result = data['chart']['result'][0]
-                
+
                 # 檢查數據結構
                 if 'timestamp' not in result or 'indicators' not in result:
                     logger.warning(f"⚠️ {stock_code}: Yahoo Finance返回數據結構不完整")
                     return None
-                
+
                 timestamps = result['timestamp']
                 quotes = result['indicators']['quote'][0]
-                
+
                 ohlc_data = []
                 for i in range(len(timestamps)):
                     try:
-                        if (quotes['open'][i] is not None and 
-                            quotes['high'][i] is not None and 
-                            quotes['low'][i] is not None and 
+                        if (quotes['open'][i] is not None and
+                            quotes['high'][i] is not None and
+                            quotes['low'][i] is not None and
                             quotes['close'][i] is not None):
-                            
+
                             ohlc_data.append({
                                 'date': datetime.fromtimestamp(timestamps[i]).strftime('%Y-%m-%d'),
                                 'open': float(quotes['open'][i]),
@@ -2284,35 +2362,35 @@ def fetch_historical_data_for_indicators(stock_code, days=60):
                     except (ValueError, TypeError, IndexError) as e:
                         logger.warning(f"⚠️ {stock_code}: 跳過無效數據點 {i}: {e}")
                         continue
-                
+
                 if len(ohlc_data) >= 34:
                     logger.info(f"✅ {stock_code}: 成功獲取 {len(ohlc_data)} 天歷史資料（Yahoo Finance）")
                     return ohlc_data[-days:] if len(ohlc_data) > days else ohlc_data
                 else:
                     logger.warning(f"⚠️ {stock_code}: Yahoo Finance資料不足，僅 {len(ohlc_data)} 天（需要至少34天）")
                     return None
-        
+
         logger.warning(f"❌ {stock_code}: Yahoo Finance失敗，HTTP狀態碼: {response.status_code}")
         if response.status_code == 404:
             logger.info(f"💡 {stock_code}: 可能是無效的股票代碼或該股票未在Yahoo Finance上市")
-        
+
     except requests.exceptions.Timeout:
         logger.warning(f"❌ {stock_code}: Yahoo Finance請求超時")
     except requests.exceptions.ConnectionError:
         logger.warning(f"❌ {stock_code}: Yahoo Finance連接錯誤")
     except Exception as e:
         logger.warning(f"❌ {stock_code}: Yahoo Finance異常 - {e}")
-    
+
     # 如果Yahoo Finance失敗，記錄錯誤並返回None
     logger.error(f"❌ {stock_code}: 無法獲取歷史資料")
     logger.info(f"💡 建議：請檢查網路連接、股票代碼是否正確，或稍後重試")
-    
+
     return None
 
 def get_issued_shares_map(force_refresh=False):
     """取得上市公司已發行普通股數，用於計算 TURN 週轉率。"""
     global issued_shares_cache, issued_shares_cache_time
-    
+
     now = get_taiwan_time()
     if (
         not force_refresh and
@@ -2321,14 +2399,14 @@ def get_issued_shares_map(force_refresh=False):
         (now - issued_shares_cache_time).total_seconds() < 24 * 3600
     ):
         return issued_shares_cache
-    
+
     url = 'https://openapi.twse.com.tw/v1/opendata/t187ap03_L'
     try:
         response = requests.get(url, headers=YAHOO_HEADERS, timeout=20, verify=False)
         if response.status_code != 200:
             logger.warning(f"取得上市公司股數失敗，HTTP {response.status_code}")
             return issued_shares_cache or {}
-        
+
         raw_json = response.json()
         shares_map = {}
         for item in raw_json if isinstance(raw_json, list) else []:
@@ -2336,7 +2414,7 @@ def get_issued_shares_map(force_refresh=False):
             shares = parse_market_number(item.get('已發行普通股數或TDR原股發行股數'))
             if code and shares > 0:
                 shares_map[code] = int(shares)
-        
+
         if shares_map:
             issued_shares_cache = shares_map
             issued_shares_cache_time = now
@@ -2356,12 +2434,12 @@ def evaluate_realtime_rule(stock_code, stock_name, issued_shares):
     historical_data = fetch_historical_data_for_indicators(stock_code, days=60)
     if not historical_data or len(historical_data) < 21:
         return None
-    
+
     latest = historical_data[-1]
     previous = historical_data[-2] if len(historical_data) >= 2 else None
     closes = [item['close'] for item in historical_data if item.get('close') is not None]
     previous_volumes = [item.get('volume', 0) for item in historical_data[-6:-1]]
-    
+
     current_price = latest['close']
     current_volume = latest.get('volume', 0)
     ma5 = simple_moving_average(closes, 5)
@@ -2371,7 +2449,7 @@ def evaluate_realtime_rule(stock_code, stock_name, issued_shares):
     change_percent = ((current_price / previous_close) - 1) * 100 if previous_close else 0
     volume_ratio = calculate_volume_ratio(current_volume, previous_volumes)
     turnover_rate = (current_volume / issued_shares * 100) if issued_shares else None
-    
+
     cond_turnover = turnover_rate is not None and turnover_rate > 10
     cond_volume_ratio = volume_ratio > 5
     cond_ma = (
@@ -2384,7 +2462,7 @@ def evaluate_realtime_rule(stock_code, stock_name, issued_shares):
     )
     cond_change = change_percent > 3
     matched = cond_turnover and cond_volume_ratio and cond_ma and cond_change
-    
+
     return {
         'code': stock_code,
         'name': stock_name,
@@ -2415,12 +2493,12 @@ def get_stock_web_data(stock_code, stock_name=None):
         if stock_code not in stocks_data:
             logger.warning(f"股票 {stock_code} 沒有即時資料")
             return None
-        
+
         current_data = stocks_data[stock_code]
-        
+
         # 獲取歷史資料用於技術指標計算
         historical_data = fetch_historical_data_for_indicators(stock_code)
-        
+
         if historical_data and len(historical_data) >= 34:
             # 將當日資料加入歷史資料
             today_data = {
@@ -2431,14 +2509,14 @@ def get_stock_web_data(stock_code, stock_name=None):
                 'close': current_data['close'],
                 'volume': current_data['volume']
             }
-            
+
             # 檢查是否已經包含當日資料
             if not historical_data or historical_data[-1]['date'] != today_data['date']:
                 historical_data.append(today_data)
-            
+
             # 計算Pine Script技術指標
             result = calculate_pine_script_indicators(historical_data)
-            
+
             if result:
                 fund_flow_trend = result['fund_trend']
                 bull_bear_line = result['multi_short_line']
@@ -2449,7 +2527,7 @@ def get_stock_web_data(stock_code, stock_name=None):
                 signal_offset_days = result.get('signal_offset_days')
                 fund_trend_previous = result['fund_trend_previous']
                 multi_short_line_previous = result['multi_short_line_previous']
-            
+
             if fund_flow_trend is not None:
                 # 根據嚴格的Pine Script條件判斷狀態
                 if banker_entry_signal:
@@ -2472,24 +2550,24 @@ def get_stock_web_data(stock_code, stock_name=None):
                 else:
                     signal_status = "資金流向弱勢"
                     score = 30
-                
+
                 # 計算成交量和趨勢信息
                 current_volume = current_data['volume']
                 volume_formatted = format_volume(current_volume)
-                
+
                 # 計算成交量趨勢（需要歷史成交量數據）
                 historical_volumes = [d.get('volume', 0) for d in historical_data[-6:-1]] if len(historical_data) > 5 else []
                 previous_volume = historical_volumes[-1] if historical_volumes else current_volume
                 volume_trend, volume_change_percent = calculate_trend_direction(current_volume, previous_volume)
-                
+
                 # 計算量比
                 volume_ratio = calculate_volume_ratio(current_volume, historical_volumes)
                 volume_ratio_class = get_volume_ratio_class(volume_ratio)
-                
+
                 # 計算資金流向和多空線趨勢
                 fund_trend_direction, fund_trend_change = calculate_trend_direction(fund_flow_trend, fund_trend_previous)
                 multi_short_line_direction, multi_short_line_change = calculate_trend_direction(bull_bear_line, multi_short_line_previous)
-                
+
                 return {
                     'name': stock_name or current_data['name'],
                     'price': current_data['close'],
@@ -2515,20 +2593,20 @@ def get_stock_web_data(stock_code, stock_name=None):
                     'signal_offset_days': signal_offset_days,
                     'banker_entry_signal': banker_entry_signal
                 }
-        
+
         # 如果無法計算技術指標，返回詳細錯誤資訊
         error_msg = "歷史資料獲取失敗"
         if historical_data is None:
             error_msg = "API連接失敗"
         elif len(historical_data) < 34:
             error_msg = f"資料不足({len(historical_data)}/34天)"
-        
+
         logger.warning(f"股票 {stock_code} 無法計算技術指標: {error_msg}")
-        
+
         # 即使無法計算技術指標，也要返回基本的成交量信息
         current_volume = current_data['volume']
         volume_formatted = format_volume(current_volume)
-        
+
         return {
             'name': stock_name or current_data['name'],
             'price': current_data['close'],
@@ -2552,7 +2630,7 @@ def get_stock_web_data(stock_code, stock_name=None):
             'is_oversold': False,
             'banker_entry_signal': False
         }
-        
+
     except Exception as e:
         logger.error(f"獲取股票 {stock_code} 資料時發生錯誤: {e}")
         return None
@@ -2562,71 +2640,71 @@ def screen_stocks():
     """篩選股票"""
     try:
         current_time = get_taiwan_time()
-        
+
         # 檢查是否有股票資料
         if not stocks_data:
             return jsonify({
                 'success': False,
                 'error': '請先更新上市股票資料'
             }), 400
-        
+
         # 獲取所有股票的完整資料（全部股票分析）
         all_stocks_data = []
         total_stocks = len(stocks_data)
         processed_count = 0
-        
+
         logger.info(f"開始分析 {total_stocks} 支上市股票的Pine Script指標...")
-        
+
         # 分批處理以避免超時（減少批次大小）
         batch_size = 10  # 從50減少到10支股票每批
         stock_codes = list(stocks_data.keys())
-        
+
         # 限制總處理數量以避免超時
         max_stocks = min(1044, len(stock_codes))  # 最多處理1044支上市股票
         stock_codes = stock_codes[:max_stocks]
-        
+
         logger.info(f"為確保穩定性，本次處理前 {max_stocks} 支上市股票")
-        
+
         for i in range(0, len(stock_codes), batch_size):
             batch_codes = stock_codes[i:i+batch_size]
             logger.info(f"處理第 {i//batch_size + 1} 批股票 ({len(batch_codes)} 支)...")
-            
+
             for stock_code in batch_codes:
                 try:
                     # 使用簡單的超時機制，不依賴signal
                     import time
                     start_time = time.time()
-                    
+
                     stock_data = get_stock_web_data(stock_code)
-                    
+
                     # 檢查是否超時
                     if time.time() - start_time > 10:  # 10秒超時
                         logger.warning(f"股票 {stock_code} 處理超時，跳過")
-                        continue                
+                        continue
                     if stock_data:
                         all_stocks_data.append({
                             'code': stock_code,
                             **stock_data
                         })
                         processed_count += 1
-                        
+
                         # 每處理5支股票記錄一次進度
                         if processed_count % 5 == 0:
                             logger.info(f"已處理 {processed_count}/{max_stocks} 支股票...")
-                            
+
                 except Exception as e:
                     logger.warning(f"處理股票 {stock_code} 時發生錯誤: {e}")
                     continue
-        
+
         # 篩選出黃柱信號的股票
         yellow_candle_stocks = [stock for stock in all_stocks_data if stock.get('banker_entry_signal', False)]
-        
+
         logger.info(f"篩選完成：共分析 {processed_count} 支上市股票，發現 {len(yellow_candle_stocks)} 支黃柱信號股票")
-        
+
         # 按評分排序
         all_stocks_data.sort(key=lambda x: x.get('score', 0), reverse=True)
         yellow_candle_stocks.sort(key=lambda x: x.get('score', 0), reverse=True)
-        
+
         return jsonify({
             'success': True,
             'all_stocks': all_stocks_data,
@@ -2637,7 +2715,7 @@ def screen_stocks():
             'data_date': data_date,
             'market': 'TWSE'
         })
-        
+
     except Exception as e:
         logger.error(f"篩選上市股票時發生錯誤: {e}")
         return jsonify({
@@ -2649,6 +2727,6 @@ if __name__ == '__main__':
     # 啟動Flask應用（移除啟動時數據更新以避免部署超時）
     logger.info("台股主力資金篩選器 - 上市市場版本啟動中...")
     logger.info("💡 請使用 /update 端點手動更新股票數據")
-    
+
     # 啟動Flask應用
     app.run(host='0.0.0.0', port=5000, debug=False)
