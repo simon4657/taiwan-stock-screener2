@@ -604,7 +604,7 @@
             </div>
             <div class="tv-settings">
                 <label for="tradingViewChartUrl">TradingView 原有圖表網址</label>
-                <input id="tradingViewChartUrl" placeholder="貼上你的圖表網址，例如：https://www.tradingview.com/chart/AbCdEf12/">
+                <input id="tradingViewChartUrl" placeholder="貼上你的圖表網址，例如：https://tw.tradingview.com/chart/AbCdEf12/">
             </div>
 
             <div id="statusMessage" class="status-message"></div>
@@ -1180,7 +1180,7 @@
         function getTradingViewChartBase() {
             const raw = (localStorage.getItem(TRADING_VIEW_CHART_KEY) || '').trim();
             const match = raw.match(/^https?:\/\/(?:[a-z0-9-]+\.)?tradingview\.com\/chart\/([^/?#]+)/i);
-            return match ? `https://www.tradingview.com/chart/${match[1]}/` : 'https://www.tradingview.com/chart/';
+            return match ? `https://tw.tradingview.com/chart/${match[1]}/` : 'https://tw.tradingview.com/chart/';
         }
 
         function tradingViewUrl(code) {
