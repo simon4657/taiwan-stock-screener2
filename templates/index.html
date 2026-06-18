@@ -327,6 +327,16 @@
             background-color: #f0f4f8;
         }
 
+        .symbol-link {
+            color: #2563eb;
+            font-weight: 800;
+            text-decoration: none;
+        }
+
+        .symbol-link:hover {
+            text-decoration: underline;
+        }
+
         /* 漲跌幅顏色 */
         .change-positive {
             color: #e53e3e;
@@ -1116,7 +1126,7 @@
 
                 tableHTML += `
                     <tr>
-                        <td><strong>${stock.code}</strong></td>
+                        <td><a class="symbol-link" href="${tradingViewUrl(stock.code)}" target="_blank" rel="noopener noreferrer">${stock.code}</a></td>
                         <td>${stock.name}</td>
                         <td><strong>$${stock.price.toFixed(2)}</strong></td>
                         <td><span class="${changeClass}">${changeDisplay}</span></td>
@@ -1138,6 +1148,10 @@
             `;
 
             return tableHTML;
+        }
+
+        function tradingViewUrl(code) {
+            return `https://www.tradingview.com/chart/?symbol=TWSE:${encodeURIComponent(code)}`;
         }
 
         // 格式化成交量
