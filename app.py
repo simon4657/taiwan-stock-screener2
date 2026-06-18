@@ -2170,6 +2170,7 @@ def run_realtime_screen_job(payload, job_id=None):
 
     requested_codes = payload.get('stock_codes') or []
     limit = payload.get('limit')
+    rules = parse_realtime_rules(payload)
     stock_list = get_twse_stock_codes()
     issued_shares = get_issued_shares_map()
 
@@ -2196,7 +2197,7 @@ def run_realtime_screen_job(payload, job_id=None):
         shares = issued_shares.get(code)
         if not shares:
             return {'code': code, 'missing_shares': True}
-        return evaluate_realtime_rule(code, stock_list.get(code, code), shares)
+        return evaluate_realtime_rule(code, stock_list.get(code, code), shares, rules)
 
     with ThreadPoolExecutor(max_workers=20) as executor:
         futures = {executor.submit(analyze_one, code): code for code in stock_codes}
@@ -2231,12 +2232,7 @@ def run_realtime_screen_job(payload, job_id=None):
 
     return {
         'success': True,
-        'rules': {
-            'turnover_rate_gt': 10,
-            'volume_ratio_gt': 5,
-            'above_ma': [5, 10, 20],
-            'change_percent_gt': 3,
-        },
+        'rules': rules,
         'matched_stocks': matched,
         'all_results': results,
         'total_requested': total,
@@ -2429,8 +2425,39 @@ def simple_moving_average(values, length):
         return None
     return sum(values[-length:]) / length
 
-def evaluate_realtime_rule(stock_code, stock_name, issued_shares):
+def parse_realtime_rules(payload):
+    """解析強勢量價突破策略參數，未提供時使用原始預設值。"""
+    source = payload.get('rules') if isinstance(payload.get('rules'), dict) else payload
+
+    def float_rule(key, default):
+        try:
+            value = float(source.get(key, default))
+            return value if math.isfinite(value) else default
+        except (TypeError, ValueError):
+            return default
+
+    raw_ma = source.get('above_ma', [5, 10, 20])
+    if not isinstance(raw_ma, list):
+        raw_ma = [5, 10, 20]
+    above_ma = []
+    for item in raw_ma:
+        try:
+            period = int(item)
+        except (TypeError, ValueError):
+            continue
+        if period in (5, 10, 20) and period not in above_ma:
+            above_ma.append(period)
+
+    return {
+        'turnover_rate_gt': float_rule('turnover_rate_gt', 10),
+        'volume_ratio_gt': float_rule('volume_ratio_gt', 5),
+        'above_ma': above_ma or [5, 10, 20],
+        'change_percent_gt': float_rule('change_percent_gt', 3),
+    }
+
+def evaluate_realtime_rule(stock_code, stock_name, issued_shares, rules=None):
     """依附件條件篩選：TURN>10、量比>5、C>MA5/10/20、漲幅>3。"""
+    rules = rules or parse_realtime_rules({})
     historical_data = fetch_historical_data_for_indicators(stock_code, days=60)
     if not historical_data or len(historical_data) < 21:
         return None
@@ -2450,17 +2477,11 @@ def evaluate_realtime_rule(stock_code, stock_name, issued_shares):
     volume_ratio = calculate_volume_ratio(current_volume, previous_volumes)
     turnover_rate = (current_volume / issued_shares * 100) if issued_shares else None
 
-    cond_turnover = turnover_rate is not None and turnover_rate > 10
-    cond_volume_ratio = volume_ratio > 5
-    cond_ma = (
-        ma5 is not None and
-        ma10 is not None and
-        ma20 is not None and
-        current_price > ma5 and
-        current_price > ma10 and
-        current_price > ma20
-    )
-    cond_change = change_percent > 3
+    ma_values = {5: ma5, 10: ma10, 20: ma20}
+    cond_turnover = turnover_rate is not None and turnover_rate > rules['turnover_rate_gt']
+    cond_volume_ratio = volume_ratio > rules['volume_ratio_gt']
+    cond_ma = all(ma_values.get(period) is not None and current_price > ma_values[period] for period in rules['above_ma'])
+    cond_change = change_percent > rules['change_percent_gt']
     matched = cond_turnover and cond_volume_ratio and cond_ma and cond_change
 
     return {
@@ -2479,6 +2500,10 @@ def evaluate_realtime_rule(stock_code, stock_name, issued_shares):
         'ma20': round(ma20, 2) if ma20 is not None else None,
         'matched': matched,
         'conditions': {
+            'turnover': cond_turnover,
+            'volume_ratio': cond_volume_ratio,
+            'above_ma': cond_ma,
+            'change': cond_change,
             'turnover_gt_10': cond_turnover,
             'volume_ratio_gt_5': cond_volume_ratio,
             'above_ma5_ma10_ma20': cond_ma,

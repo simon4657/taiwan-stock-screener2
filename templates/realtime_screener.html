@@ -62,6 +62,26 @@
             display: grid;
             gap: 6px;
         }
+        .strategy-settings {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+        }
+        .check-row {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            min-height: 41px;
+            flex-wrap: wrap;
+        }
+        .check-row label {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin: 0;
+            font-weight: 600;
+        }
+        .check-row input { width: auto; }
         label { display: block; font-weight: 700; margin-bottom: 6px; }
         input {
             width: 100%;
@@ -167,7 +187,7 @@
         @media (max-width: 820px) {
             body { padding: 14px; }
             header { display: block; }
-            .rules, .stats, .controls { grid-template-columns: 1fr; }
+            .rules, .stats, .controls, .strategy-settings { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -183,10 +203,35 @@
 
         <section class="panel">
             <div class="rules">
-                <div class="rule"><strong>TURN &gt; 10</strong><span>成交量 / 已發行普通股數 × 100</span></div>
-                <div class="rule"><strong>量比 &gt; 5</strong><span>今日量 / 前 5 日平均量</span></div>
-                <div class="rule"><strong>C &gt; MA5/10/20</strong><span>現價站上三條均線</span></div>
-                <div class="rule"><strong>漲幅 &gt; 3%</strong><span>相對前一交易日收盤</span></div>
+                <div class="rule"><strong>TURN 門檻</strong><span>成交量 / 已發行普通股數 × 100</span></div>
+                <div class="rule"><strong>量比門檻</strong><span>今日量 / 前 5 日平均量</span></div>
+                <div class="rule"><strong>均線條件</strong><span>可選 MA5 / MA10 / MA20</span></div>
+                <div class="rule"><strong>漲幅門檻</strong><span>相對前一交易日收盤</span></div>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="strategy-settings">
+                <div>
+                    <label for="turnoverThreshold">週轉率大於 %</label>
+                    <input id="turnoverThreshold" type="number" step="0.1" min="0" value="10">
+                </div>
+                <div>
+                    <label for="volumeRatioThreshold">量比大於</label>
+                    <input id="volumeRatioThreshold" type="number" step="0.1" min="0" value="5">
+                </div>
+                <div>
+                    <label for="changeThreshold">漲幅大於 %</label>
+                    <input id="changeThreshold" type="number" step="0.1" value="3">
+                </div>
+                <div>
+                    <label>站上均線</label>
+                    <div class="check-row">
+                        <label><input id="ma5Check" type="checkbox" checked>MA5</label>
+                        <label><input id="ma10Check" type="checkbox" checked>MA10</label>
+                        <label><input id="ma20Check" type="checkbox" checked>MA20</label>
+                    </div>
+                </div>
             </div>
         </section>
 
@@ -257,6 +302,7 @@
         }
 
         const TRADING_VIEW_CHART_KEY = 'tradingViewChartUrl';
+        const STRATEGY_RULES_KEY = 'realtimeStrategyRules';
 
         function getTradingViewChartBase() {
             const raw = (localStorage.getItem(TRADING_VIEW_CHART_KEY) || '').trim();
@@ -275,6 +321,46 @@
             input.addEventListener('change', () => {
                 localStorage.setItem(TRADING_VIEW_CHART_KEY, input.value.trim());
             });
+        }
+
+        function readNumberInput(id, fallback) {
+            const value = Number(document.getElementById(id).value);
+            return Number.isFinite(value) ? value : fallback;
+        }
+
+        function getStrategyRules() {
+            const aboveMa = [];
+            if (document.getElementById('ma5Check').checked) aboveMa.push(5);
+            if (document.getElementById('ma10Check').checked) aboveMa.push(10);
+            if (document.getElementById('ma20Check').checked) aboveMa.push(20);
+            return {
+                turnover_rate_gt: readNumberInput('turnoverThreshold', 10),
+                volume_ratio_gt: readNumberInput('volumeRatioThreshold', 5),
+                change_percent_gt: readNumberInput('changeThreshold', 3),
+                above_ma: aboveMa,
+            };
+        }
+
+        function saveStrategyRules() {
+            localStorage.setItem(STRATEGY_RULES_KEY, JSON.stringify(getStrategyRules()));
+        }
+
+        function initStrategySettings() {
+            try {
+                const saved = JSON.parse(localStorage.getItem(STRATEGY_RULES_KEY) || '{}');
+                if (Number.isFinite(Number(saved.turnover_rate_gt))) document.getElementById('turnoverThreshold').value = saved.turnover_rate_gt;
+                if (Number.isFinite(Number(saved.volume_ratio_gt))) document.getElementById('volumeRatioThreshold').value = saved.volume_ratio_gt;
+                if (Number.isFinite(Number(saved.change_percent_gt))) document.getElementById('changeThreshold').value = saved.change_percent_gt;
+                if (Array.isArray(saved.above_ma)) {
+                    document.getElementById('ma5Check').checked = saved.above_ma.includes(5);
+                    document.getElementById('ma10Check').checked = saved.above_ma.includes(10);
+                    document.getElementById('ma20Check').checked = saved.above_ma.includes(20);
+                }
+            } catch (error) {
+                localStorage.removeItem(STRATEGY_RULES_KEY);
+            }
+            ['turnoverThreshold', 'volumeRatioThreshold', 'changeThreshold', 'ma5Check', 'ma10Check', 'ma20Check']
+                .forEach(id => document.getElementById(id).addEventListener('change', saveStrategyRules));
         }
 
         function renderTable(rows) {
@@ -316,10 +402,10 @@
                                 <td>${numberText(row.ma5)}</td>
                                 <td>${numberText(row.ma10)}</td>
                                 <td>${numberText(row.ma20)}</td>
-                                <td>${conditionMark(row.conditions.turnover_gt_10)}</td>
-                                <td>${conditionMark(row.conditions.volume_ratio_gt_5)}</td>
-                                <td>${conditionMark(row.conditions.above_ma5_ma10_ma20)}</td>
-                                <td>${conditionMark(row.conditions.change_gt_3)}</td>
+                                <td>${conditionMark(row.conditions.turnover)}</td>
+                                <td>${conditionMark(row.conditions.volume_ratio)}</td>
+                                <td>${conditionMark(row.conditions.above_ma)}</td>
+                                <td>${conditionMark(row.conditions.change)}</td>
                                 <td>${row.date || '-'}</td>
                             </tr>
                         `).join('')}
@@ -381,6 +467,12 @@
             const body = {};
             if (codes.length) body.stock_codes = codes;
             if (limitValue) body.limit = Number(limitValue);
+            body.rules = getStrategyRules();
+            if (!body.rules.above_ma.length) {
+                statusText.textContent = '請至少選擇一條均線條件。';
+                return;
+            }
+            saveStrategyRules();
 
             runBtn.disabled = true;
             statusText.textContent = '正在抓取即時報價與歷史均線資料...';
@@ -408,7 +500,10 @@
                 runBtn.disabled = false;
             }
         });
-        document.addEventListener('DOMContentLoaded', initTradingViewSetting);
+        document.addEventListener('DOMContentLoaded', () => {
+            initTradingViewSetting();
+            initStrategySettings();
+        });
     </script>
 </body>
 </html>
